@@ -30,19 +30,9 @@ import velocihub as vh
 from velocihub.project import format_duration
 
 
-def safe_output():
-    """The characters the console can't encode (→, σ... in a cp1252 console, or output redirected to a file) printed
-    as ? instead of stopping the run."""
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")
-        except (AttributeError, ValueError):
-            pass
-
 
 def gui(argv=None):
     """The interface, optionally with the images of a folder (those matching the pattern) and a file of masks."""
-    safe_output()
     parser = argparse.ArgumentParser(prog="velocihub", description="VelociHub: pre-processing, PIV/PTV and "
                                      "post-processing of PIV images, with its interface")
     parser.add_argument("folder", nargs="?", help="folder of the training images")
@@ -54,7 +44,6 @@ def gui(argv=None):
 
 def batch(argv=None):
     """Pre-processing and PIV of measurement folders with the default settings of the interface (velocihub-batch)."""
-    safe_output()
     parser = argparse.ArgumentParser(prog="velocihub-batch", description="VelociHub batch: pre-processing and PIV of measurement folders "
                                                  "with the default settings of the interface",
                                      fromfile_prefix_chars="@")

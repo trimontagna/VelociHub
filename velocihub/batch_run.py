@@ -153,24 +153,24 @@ def post_inputs(folder, s):
 
 # ------------------------------------------------------------------ steps of a project
 
-def run_preprocessing(project, job):
-    result = batch.preprocess_folder(project["folder"], project["settings"]["preprocessing"], progress=Progress)
+def run_preprocessing(project, job, progress=Progress):
+    result = batch.preprocess_folder(project["folder"], project["settings"]["preprocessing"], progress=progress)
     return result.status, result.message
 
 
-def run_piv(project, job):
+def run_piv(project, job, progress=Progress):
     s = project["settings"]
     p = s["piv"]
     engine = piv.get_engine(p.get("engine"), **(p.get("options") or {}))
     result = batch.process_folder(project["folder"], engine=engine, settings=p.get("settings") or {},
-                                  preprocessing=s["preprocessing"], progress=Progress,
+                                  preprocessing=s["preprocessing"], progress=progress,
                                   output_folder=p.get("output_folder"), force=bool(job["options"].get("force")),
                                   report=print, regression=p.get("regression"))
     return result.status, result.describe()
 
 
-def run_postprocessing(project, job):
-    from .gui.postprocessing_page import export_choice, export_index, export_options  # Pure functions
+def run_postprocessing(project, job, progress=Progress):
+    from .settings import export_choice, export_index, export_options
 
     folder = project["folder"]
     s = project["settings"]["postprocessing"]
@@ -187,7 +187,7 @@ def run_postprocessing(project, job):
         remove_results(previous_results(post_export_folder(folder, s, maps), project_name(folder)))
     files = post.export(post_export_folder(folder, s, maps),
                         index if -n <= index < n else 0, name=project_name(folder),
-                        progress=Progress("Export"), **export_options(s.get("export") or {}, n))
+                        progress=progress("Export") if progress else None, **export_options(s.get("export") or {}, n))
     return "done", f"{len(files)} files exported in {format_duration(time.time() - t0)}"
 
 
@@ -264,7 +264,7 @@ def run_stitching(job, stitching):
     """A chain of projects post-processed and stitched (archiving/post_archive.main; stitching: {"setup", "members":
     [{"folder", "root", "fov"}], the reference first}): the quantities of the reference exported for all of them, the
     stitched figures in the folder Stitched of its PostProcessing folder."""
-    from .gui.postprocessing_page import export_choice, export_index, export_options
+    from .settings import export_choice, export_index, export_options
 
     from .archiving import post_archive as r
 

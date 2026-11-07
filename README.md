@@ -11,8 +11,18 @@ VelociHub takes a set of PIV images all the way to velocity fields and their fig
 | **Archiving (add-on)** | Projects packed into ZIP/TAR archives, and the post-processing + stitching of several fields of view of an archive. |
 
 Every setting and result is kept in a project file (`VelociHub_project.json`) next to the images, so a folder opened
-again comes back as you left it. Each step also has a Python API that does exactly what the interface does, with the
-same parameters.
+again comes back as you left it. Everything also has a Python API that does exactly what the interface does, with the
+same parameters:
+
+```python
+import velocihub as vh
+
+p = vh.Project("D:/Jet/Run_30")
+p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
+p.set_postprocessing(camera=vh.Camera(196.1, frame_rate_hz=150), outlier_k=4, figures=["mean_velocity", "u_rms"])
+p.save()          # opens in the interface with these settings
+p.run()           # pre-processing, PIV, post-processing
+```
 
 ## Quick start
 
@@ -42,7 +52,7 @@ The full tutorial is in [docs/installation.md](docs/installation.md).
 | [Post-processing](docs/postprocessing.md) | Camera, scale space, reference quantities, recipe, figure catalogue, exports and videos |
 | [Batch processing](docs/batch-processing.md) | Workspace, window Batch, `velocihub-batch`, batch API |
 | [Archiving (add-on)](docs/archiving.md) | Archives of projects, post-processing and stitching of fields of view, alignment |
-| [Python API](docs/api.md) | How to do every action of the interface from Python, with the same parameters |
+| [Python API](docs/api.md) | `vh.Project` (a measurement as the interface sees it: settings, save, run), batch and stitching helpers, and the objects of each step: every action of the interface from Python, with the same parameters |
 | [Packaging](docs/packaging.md) | Building and installing VelociHub with pip and conda |
 | [Credits](CREDITS.md) | Authors and licences of all the software VelociHub uses |
 

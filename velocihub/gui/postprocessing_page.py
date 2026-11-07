@@ -18,15 +18,20 @@ from tkinter import filedialog, ttk
 from PIL import Image
 
 from .. import imaging, lagrangian, piv
-from ..fields import (VIDEO_FORMAT, VIDEO_FORMATS, VIDEO_FPS, Video, Wiper, count_maps, load_csv_folder,
-                      load_vectors, num2str, ptv_results, scale_frames, sig2)
+from ..fields import (VIDEO_FORMATS, Video, Wiper, count_maps, load_csv_folder, load_vectors, num2str, ptv_results,
+                      scale_frames, sig2)
 from ..postprocessing import (FIGURE_GROUPS, FIGURE_SYMBOLS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES,
                               POSTPROCESSING_FOLDER, PostProcessing, PostSettings, count_results,
                               default_export_folder, previous_results, remove_results)
 from ..preprocessing import same_path
 from .batch_dialog import BatchStep, Field, PanelForm, run_batch
-from .widgets import (COLORMAPS, Dialog, FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, RangeSlider,
-                      SidePanel, ask_colour_range, colour_tools, getpref, setpref)
+from .widgets import (Dialog, FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, RangeSlider, SidePanel,
+                      ask_colour_range, colour_tools)
+from ..prefs import getpref, setpref
+from ..settings import (COMPARE_FRACTION, export_choice, export_index, export_maps, export_options,
+                        figure_params_from_tiles, figure_params_of, image_settings_of, post_from_project,
+                        post_to_project, read_step_fps, settings_from_record, settings_record, validate_post,
+                        video_settings, video_settings_of)
 
 # Figures shown in the tiles at the start (the instantaneous ones are browsed with the slider and the arrows)
 DEFAULT_VIEWS = ("velocity", "mean_velocity", "turbulence_intensity", "core_map")
@@ -35,8 +40,6 @@ NO_COMPARISON = "none"
 COMPARE_GROUPS = [(None, (NO_COMPARISON,))] + [(group, tuple(k for k in keys if k in MAP_FIGURES))
                                                for group, keys in FIGURE_GROUPS]
 COMPARE_TITLES = {**FIGURE_TITLES, NO_COMPARISON: "None"}
-# Position of the wiper when a second quantity is chosen (fraction of the width of the map)
-COMPARE_FRACTION = 0.5
 # The symbols of the quantities (LaTeX) in plain text, for the widgets (Tk can't show LaTeX): replaced in this order,
 # then the bar or the tilde over the first letter of \overline{...}, \widetilde{...}
 PLAIN_SYMBOLS = [("$", ""), (r"\mathbf{u}", "u"), (r"\mathrm{valid}", "valid"), (r"\omega", "ω"), (r"\sigma", "σ"),
@@ -147,116 +150,8 @@ CORE_MODE_HELP = ("Velocity level: the core is where the mean u is at least the 
                   "little from the previous profile; the maximum of that profile is the cutoff velocity, whose "
                   "isocontour outlines the core. The profiles analysed are more than those shown (Profiles for "
                   "detection).")
-# The export choice by default: all the figures, no video. first, last, step, fps, format: the maps and settings of
-# the videos; map, map_last, map_step: the maps of the instantaneous figures (1 to N; None: the last map); range: the
-# maps of the videos for the instantaneous figures too (ExportDialog of the archive script)
-DEFAULT_EXPORT = {"figures": None, "videos": [], "range": False, "first": 1, "last": None, "step": 1,
-                  "fps": VIDEO_FPS, "format": VIDEO_FORMAT, "map": None, "map_last": None, "map_step": 1}
 # Formats of the videos, as chosen in the dialogs
 FORMAT_LABELS = {"gif": "GIF (256 colours, plays everywhere)", "mp4": "MP4 (H.264, full colours, needs ffmpeg)"}
-
-
-def export_choice(saved):
-    """The export choice of saved settings (preferences, project), completed with the defaults (the figures that no
-    longer exist left out)."""
-    choice = dict(DEFAULT_EXPORT)
-    if isinstance(saved, dict):
-        choice.update({key: value for key, value in saved.items() if key in DEFAULT_EXPORT})
-    if choice["figures"] is not None:
-        choice["figures"] = [key for key in choice["figures"] if key in FIGURE_TITLES]
-    # The videos of the figures of each map (any figure with rolling statistics)
-    choice["videos"] = [key for key in choice["videos"] or [] if key in FIGURE_TITLES]
-    if choice["format"] not in VIDEO_FORMATS:
-        choice["format"] = VIDEO_FORMAT
-    return choice
-
-
-def video_settings(saved):
-    """The settings of a video (VideoDialog) saved: every N maps, frames per second, format, first and last maps (1
-    to N; last None: up to the last one), the defaults for those missing or invalid."""
-    saved = saved if isinstance(saved, dict) else {}
-    out = {"step": 1, "fps": VIDEO_FPS, "format": VIDEO_FORMAT, "first": 1, "last": None}
-    try:
-        out["step"], out["fps"] = read_step_fps(str(saved.get("step", 1)), str(saved.get("fps", VIDEO_FPS)))
-    except ValueError:
-        pass
-    if saved.get("format") in VIDEO_FORMATS:
-        out["format"] = saved["format"]
-    for key in ("first", "last"):
-        if isinstance(saved.get(key), int) and not isinstance(saved[key], bool) and saved[key] >= 1:
-            out[key] = saved[key]
-    return out
-
-
-def figure_params_of(saved):
-    """The parameters of the figures by quantity saved (project, batch settings), the invalid ones left out:
-    {"clims": {key: (vmin, vmax)}, "cmaps": {key: name}, "contours": {key: value}, "compares": {key: second map},
-    "wipers": {key: fraction}}."""
-    saved = saved if isinstance(saved, dict) else {}
-
-    def of(name, check, convert=lambda v: v):
-        values = saved.get(name) if isinstance(saved.get(name), dict) else {}
-        return {k: convert(v) for k, v in values.items() if k in FIGURE_TITLES and check(v)}
-    return {"clims": of("clims", lambda v: isinstance(v, (list, tuple)) and len(v) == 2, tuple),
-            "cmaps": of("cmaps", lambda v: v in COLORMAPS),
-            "contours": of("contours", lambda v: isinstance(v, (int, float)), float),
-            "compares": of("compares", lambda v: v in MAP_FIGURES),
-            "wipers": of("wipers", lambda v: isinstance(v, (int, float)) and 0 <= v <= 1, float)}
-
-
-def figure_params_from_tiles(data):
-    """The parameters of the figures of a project of the versions that kept them by tile: those of the first tile
-    showing each quantity."""
-    out = {"clims": {}, "cmaps": {}, "contours": {}, "compares": {}, "wipers": {}}
-    views = data.get("views") or []
-    for name, saved in (("clims", "colour_ranges"), ("cmaps", "colour_maps"), ("contours", "contours")):
-        for values in data.get(saved) or []:
-            for key, value in (values or {}).items():
-                out[name].setdefault(key, value)
-    for view, view2 in zip(views, data.get("compare_views") or []):
-        if view2 is not None:
-            out["compares"].setdefault(view, view2)
-    return figure_params_of(out)
-
-
-def image_settings(saved):
-    """The maps of the instantaneous figures of a quantity saved (its own: first, last, step; 1 to N), completed."""
-    saved = saved if isinstance(saved, dict) else {}
-    first = saved.get("first") if isinstance(saved.get("first"), int) and saved["first"] >= 1 else 1
-    last = saved.get("last") if isinstance(saved.get("last"), int) and saved["last"] >= first else None
-    step = saved.get("step") if isinstance(saved.get("step"), int) and saved["step"] >= 1 else 1
-    return {"first": first, "last": last, "step": step}
-
-
-def image_settings_of(saved):
-    """The maps of the instantaneous figures of the quantities with their own ({figure: settings})."""
-    return {key: image_settings(value) for key, value in (saved if isinstance(saved, dict) else {}).items()
-            if key in FIGURE_TITLES}
-
-
-def image_maps(first, last, step, n):
-    """The maps (indices) of the instantaneous figures from the map first to the map last (None: the last one)
-    every step maps, among n maps."""
-    last = min(int(last or n), n)
-    return range(min(max(int(first), 1), last) - 1, last, max(int(step), 1))
-
-
-def video_settings_of(saved):
-    """The settings of the videos of the main quantities saved ({figure: settings}, the figures that no longer exist
-    left out)."""
-    return {key: video_settings(value) for key, value in (saved if isinstance(saved, dict) else {}).items()
-            if key in FIGURE_TITLES}
-
-
-def read_step_fps(step, fps):
-    """Every N maps and frames per second entered (texts): ValueError with a message if they are invalid."""
-    try:
-        step, fps = int(step), float(fps)
-    except ValueError:
-        step = fps = 0
-    if step < 1 or not fps > 0:
-        raise ValueError("Every N maps: an integer >= 1; frames per second: a positive number")
-    return step, fps
 
 
 def format_box(master, var):
@@ -266,12 +161,6 @@ def format_box(master, var):
     box.bind("<<ComboboxSelected>>", lambda event: var.set(next(k for k, v in FORMAT_LABELS.items()
                                                                   if v == box.get())))
     return box
-
-
-def export_maps(choice, n):
-    """The maps (indices) of an export choice for n maps: from the first to the last one, every step."""
-    last = min(int(choice["last"] or n), n)
-    return range(min(max(int(choice["first"] or 1), 1), last) - 1, last, max(int(choice["step"]), 1))
 
 
 def describe_export(choice, n, own=()):
@@ -291,18 +180,6 @@ def describe_export(choice, n, own=()):
                  + (": others " if own else ": ") + f"{choice['format'].upper()}, "
                  + f"{where if not choice['range'] else 'the same maps'}, {num2str(choice['fps'])} frames/s")
     return text
-
-
-def own_video_maps(settings, n):
-    """The maps of a video with its own settings (video_settings) among n maps: indices."""
-    last = min(settings["last"] or n, n)
-    return range(min(settings["first"], last) - 1, last, settings["step"])
-
-
-def export_index(choice):
-    """The map of the instantaneous figures exported (0-based; -1: the last one): the one chosen in the quantities
-    (choice["map"]), else the last one."""
-    return int(choice["map"]) - 1 if choice.get("map") else -1
 
 
 def images_summary(post, first, last, step):
@@ -347,29 +224,9 @@ def video_summary(post, first, last, step, fps):
     return text
 
 
-def export_options(spec, n):
-    """The options of PostProcessing.export of an export specification (quantities.export_spec: choice, params,
-    videos) for n maps: the figures, the maps of the instantaneous ones, the videos (those of the quantities with
-    their own settings unless the same for all), the parameters of the figures by quantity and the comparisons."""
-    choice = export_choice(spec.get("choice"))
-    params = figure_params_of(spec.get("params"))
-    maps = export_maps(choice, n)
-    own = {key: dict(maps=list(own_video_maps(value, n)), fps=value["fps"], format=value["format"])
-           for key, value in video_settings_of(spec.get("videos")).items() if key in choice["videos"]}
-    # The instantaneous figures: the maps chosen (None: the last map), those of the quantities with their own
-    images = (list(maps) if choice["range"] else list(image_maps(choice["map"], choice["map_last"] or choice["map"],
-                                                                 choice["map_step"], n)) if choice["map"] else None)
-    own_images = {key: list(image_maps(value["first"], value["last"], value["step"], n))
-                  for key, value in image_settings_of(spec.get("images")).items()}
-    return dict(figures=choice["figures"], maps=images, videos=choice["videos"], image_options=own_images,
-                fps=choice["fps"], video_maps=list(maps), video_format=choice["format"], video_options=own,
-                clims=params["clims"], cmaps=params["cmaps"], contours=params["contours"],
-                compares={k: (v, params["wipers"].get(k, COMPARE_FRACTION)) for k, v in params["compares"].items()})
-
-
 def describe_post(settings):
     """The settings of the post-processing of a batch, in a line."""
-    from .quantities import describe_spec, export_spec
+    from ..settings import describe_spec, export_spec
 
     try:
         steps = " → ".join(settings_from_record(settings.get("settings") or {}).steps())
@@ -390,13 +247,6 @@ BATCH_LABELS = {"use_u_ref": "Velocities over u_ref", "u_ref": "Ref. velocity u_
                 "rolling_maps": "Rolling interval (maps)", "core_u_ref": "Jet theory u_ref (m/s; empty: max of mean u)",
                 "pod_mode": "POD modes exported (first to last)",
                 "pod_combine": "POD modes summed (the background of each image)"}
-
-
-def results_method(section):
-    """The results post-processed of the section postprocessing of a project file: PTV if its maps folder is its
-    subfolder PTV, else PIV (the default: those of the PTV for a project without PIV results)."""
-    maps = section.get("maps_folder")
-    return "PTV" if isinstance(maps, str) and os.path.normpath(maps) == piv.PTV_FOLDER else "PIV"
 
 
 def batch_maps_folder(project, settings):
@@ -453,72 +303,6 @@ def post_fields(settings):
                                  "PostProcessing_PTV for the results of a PTV: PostProcessing is that of the "
                                  "PIV only). "
                                  "Set per project, not on folders."), project_only=True)]
-
-
-def post_to_project(section, settings):
-    """The section postprocessing of a project file with the batch settings of the post-processing: the recipe,
-    the results post-processed (the maps folder: the subfolder PTV, or the default one for PIV), the scale space,
-    the camera (as the side panel keeps it), the export folder and the quantities exported (the rest kept: the
-    tiles, another maps folder, the last export)."""
-    out = dict(section)
-    if settings.get("results") == "PTV":
-        out["maps_folder"] = piv.PTV_FOLDER
-    elif settings.get("results") == "PIV" and results_method(out) == "PTV":
-        out["maps_folder"] = None
-    if settings.get("settings") is not None:
-        out["settings"] = settings["settings"]
-    if settings.get("space"):
-        out["space"] = settings["space"]
-    camera = settings.get("camera")
-    out["camera"] = ({"fov_width": num2str(camera["fov_width_mm"]), "x_offset": num2str(camera["x_offset_mm"]),
-                      "y_offset": num2str(camera.get("y_offset_mm") or 0),
-                      "frame_rate": num2str(camera["frame_rate_hz"])} if camera
-                     else {**(out.get("camera") or {}), "fov_width": ""})
-    if "export_folder" in settings:
-        out["export_folder"] = settings["export_folder"]
-    spec = settings.get("export")
-    if isinstance(spec, dict):
-        out.update(export_choice=spec.get("choice"), figure_params=spec.get("params"),
-                   video_settings=spec.get("videos"), image_settings=spec.get("images"))
-    return out
-
-
-def post_from_project(section):
-    """The batch settings of the post-processing of the section postprocessing of a project file: the results
-    post-processed, the recipe, the scale space, the camera, the export folder and the quantities exported."""
-    camera = section.get("camera") or {}
-    try:
-        camera = {"fov_width_mm": float(camera["fov_width"]), "x_offset_mm": float(camera.get("x_offset") or 0),
-                  "y_offset_mm": float(camera.get("y_offset") or 0),
-                  "frame_rate_hz": float(camera.get("frame_rate") or piv.PRESET_FRAME_RATE)}
-    except (KeyError, TypeError, ValueError):
-        camera = None
-    params = section.get("figure_params") if "figure_params" in section else figure_params_from_tiles(section)
-    return {"results": results_method(section), "settings": section.get("settings") or settings_record(PostSettings()),
-            "space": section.get("space") or "physical", "camera": camera,
-            "export_folder": section.get("export_folder"),
-            "export": {"choice": section.get("export_choice"), "params": params,
-                       "videos": section.get("video_settings"), "images": section.get("image_settings")}}
-
-
-def validate_post(settings):
-    """Batch settings of the post-processing checked (the recipe: PostSettings): ValueError with a message. The
-    camera without the width of the field of view: none; the export specification completed."""
-    from .quantities import export_spec
-
-    settings_from_record(settings.get("settings") or {})
-    settings["export"] = export_spec(settings.get("export"))
-    camera = settings.get("camera")
-    if isinstance(camera, dict):
-        if camera.get("fov_width_mm") is None:
-            settings["camera"] = None
-        else:
-            camera.setdefault("x_offset_mm", 0.0)
-            camera.setdefault("y_offset_mm", 0.0)
-            camera.setdefault("frame_rate_hz", piv.PRESET_FRAME_RATE)
-            piv.Camera(float(camera["fov_width_mm"]), float(camera["x_offset_mm"]), float(camera["frame_rate_hz"]),
-                       y_offset_mm=float(camera["y_offset_mm"]))
-    return settings
 
 
 # Where the statistical outlier filtering is used (below its settings)
@@ -1053,18 +837,6 @@ def describe_fields(f):
     if settings.get("preprocessing"):
         lines.append(f"Images: {settings['preprocessing']}")
     return "\n".join(lines)
-
-
-def settings_record(settings):
-    """Settings of the post-processing, as saved (JSON)."""
-    return asdict(settings)
-
-
-def settings_from_record(record):
-    """Recipe of saved settings (settings_record), the settings that no longer exist ignored: TypeError or
-    ValueError if it is invalid."""
-    names = {f.name for f in dataclass_fields(PostSettings)}
-    return PostSettings(**{key: value for key, value in record.items() if key in names})
 
 
 class PostProcessingPage(Page):
@@ -1763,7 +1535,8 @@ class PostProcessingPage(Page):
 
     def choose_quantities(self):
         """Run step > Quantities...: the quantities exported and their parameters (QuantitiesDialog)."""
-        from .quantities import QuantitiesDialog, export_spec
+        from .quantities import QuantitiesDialog
+        from ..settings import export_spec
 
         spec = QuantitiesDialog(self.app.parent(), export_spec(self.export_spec()), rolling=self.panel.rolling.get(),
                                 post=self.post).run()
@@ -1792,7 +1565,8 @@ class PostProcessingPage(Page):
                 "export": self.export_spec()}
 
     def batch_step(self, title="Post-processing", job=None, options=None):
-        from .quantities import QuantitiesEditor, export_spec
+        from .quantities import QuantitiesEditor
+        from ..settings import export_spec
 
         page = self
         # The PTV and the figures of the images and of the POD of the projects, from the settings of their vector

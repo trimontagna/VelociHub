@@ -28,7 +28,8 @@ from scipy import ndimage
 from matplotlib.ticker import FuncFormatter, NullFormatter
 
 from . import imaging, lagrangian
-from .fields import EXPORT_DPI, LREF, TFLOW, UREF, VIDEO_FORMAT, VIDEO_FPS, FieldAnalysis, FieldSettings, map_indices, num2str, ptv_results, quiet
+from .fields import (EXPORT_DPI, LREF, TFLOW, UREF, VIDEO_FORMAT, VIDEO_FPS, FieldAnalysis, FieldSettings, map_indices,
+                     num2str, ptv_results, quiet)
 from .imaging import ImageAnalysis
 from .lagrangian import LagrangianAnalysis
 from .project import export_name, relative

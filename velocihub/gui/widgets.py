@@ -1,7 +1,6 @@
 """Widgets of the interface: Matplotlib figure panels, waitbar, dialogs, side panels and help dots, and the
 preferences kept from a session to the next."""
 
-import json
 import os
 import subprocess
 import sys
@@ -15,44 +14,11 @@ from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.transforms import blended_transform_factory
 
 from ..preprocessing import Stopped, as2d, same_path
-
-# Replaces the MATLAB preferences (getpref/setpref)
-PREFS_FILE = os.path.join(os.path.expanduser("~"), ".velocihub.json")
-# The preferences of the previous names of the tool (Pre_PIV_Post, POD_PAIRS): read until PREFS_FILE is written
-LEGACY_PREFS_FILES = tuple(os.path.join(os.path.expanduser("~"), name) for name in (".ppp.json", ".pod_pairs.json"))
+from ..settings import (COLORMAPS)
 
 
 ################################################################################
 # MATLAB functions
-
-
-def read_prefs():
-    """All the preferences (PREFS_FILE, else LEGACY_PREFS_FILES; none if neither can be read)."""
-    for path in (PREFS_FILE, *LEGACY_PREFS_FILES):
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            continue
-    return {}
-
-
-def getpref(name, default=None):
-    """MATLAB getpref('VelociHub', name)."""
-    prefs = read_prefs()
-    return prefs.get(name, default) if isinstance(prefs, dict) else default
-
-
-def setpref(name, value):
-    """MATLAB setpref('VelociHub', name, value)."""
-    prefs = read_prefs()
-    prefs = prefs if isinstance(prefs, dict) else {}
-    prefs[name] = value
-    try:
-        with open(PREFS_FILE, "w") as f:
-            json.dump(prefs, f, indent=2)
-    except OSError:
-        pass
 
 
 def winopen(path):
@@ -148,9 +114,6 @@ class Toolbar(NavigationToolbar2Tk):
     toolitems = [item for item in NavigationToolbar2Tk.toolitems if item[0] != "Subplots"]
 
 
-# Colour maps proposed for the maps of the tiles ("Default": the one chosen for the figure)
-COLORMAPS = ("viridis", "magma", "inferno", "plasma", "cividis", "RdBu_r", "coolwarm", "seismic", "turbo", "jet",
-             "gray")
 DEFAULT_COLORMAP = "Default"
 
 

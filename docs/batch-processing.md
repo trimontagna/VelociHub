@@ -76,6 +76,22 @@ Ctrl+C stops the PIV after its current pair; running again continues from the la
 
 ## 4. Batch API
 
+The simplest way is the high-level API ([api.md](api.md), section 0), which runs each project with the settings of
+its project file, as the window Batch does:
+
+```python
+import velocihub as vh
+
+items = vh.projects("D:/Jet")             # or a workspace file
+for p in items:
+    p.set_piv(overlap=75)
+    p.save()
+vh.run("piv", items)
+vh.run("postprocessing", items)
+```
+
+The lower-level functions of `velocihub.batch` take the settings as arguments instead:
+
 ```python
 import velocihub as vh
 

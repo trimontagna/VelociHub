@@ -16,10 +16,11 @@ from ..fields import num2str
 from ..imaging import STATIC
 from ..lagrangian import GROUP as PTV_GROUP
 from ..postprocessing import FIGURE_GROUPS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES
-from .postprocessing_page import (COMPARE_FRACTION, DEFAULT_EXPORT, FORMAT_LABELS, export_choice, figure_params_of,
-                                  image_maps, image_settings, image_settings_of, images_summary, read_step_fps,
-                                  video_settings, video_settings_of, video_summary)
-from .widgets import COLORMAPS, Dialog, RangeSlider
+from .postprocessing_page import FORMAT_LABELS, images_summary, video_summary
+from ..settings import COMPARE_FRACTION, DEFAULT_EXPORT, image_maps, image_settings, read_step_fps, video_settings
+from .widgets import Dialog, RangeSlider
+from ..settings import COLORMAPS
+from ..settings import export_spec
 
 AUTO = "(the figure's)"
 NONE = "None"
@@ -28,18 +29,6 @@ NONE = "None"
 CHECKED, UNCHECKED, UNAVAILABLE, PARTIAL = "☑", "☐", "⬚", "▣"
 # The quantities of the PTV (exported for the results of a PTV only) and their group
 PTV_KEYS, PTV_GROUP_ROW = set(PTV_GROUP[1]), "group|" + PTV_GROUP[0]
-
-
-def export_spec(saved):
-    """An export specification (saved: in the project or the batch settings), completed: {"choice": export choice,
-    "params": parameters of the figures by quantity, "videos": settings of the videos of the quantities with their
-    own, "images": instantaneous maps of the quantities with their own}."""
-    saved = saved if isinstance(saved, dict) else {}
-    return {"choice": export_choice(saved.get("choice")),
-            "params": {k: (dict(v) if k != "clims" else {q: list(c) for q, c in v.items()})
-                       for k, v in figure_params_of(saved.get("params")).items()},
-            "videos": video_settings_of(saved.get("videos")),
-            "images": image_settings_of(saved.get("images"))}
 
 
 def quantity_changes(spec, key):
@@ -73,17 +62,6 @@ def global_changes(spec):
     if (choice.get("map_step") or 1) != 1:
         out.add("images_step")
     return out
-
-
-def describe_spec(spec):
-    """An export specification in a line."""
-    choice = spec["choice"]
-    figures = len(FIGURE_TITLES) if choice["figures"] is None else len(choice["figures"])
-    params = spec["params"]
-    tuned = {k for name in ("clims", "cmaps", "contours", "compares") for k in params[name]}
-    return (f"{figures} figures, {len(choice['videos'])} videos"
-            + (f", {len(tuned)} quantities with their own parameters" if tuned else "")
-            + (f", {len(spec['videos'])} with their own video settings" if spec["videos"] else ""))
 
 
 class VideoBox:

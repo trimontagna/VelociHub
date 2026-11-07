@@ -1,24 +1,112 @@
 # Python API
 
 Everything the interface does can be done from Python with the same parameters: the interface itself calls these
-functions. This page goes through each part in the order of the interface, and gives for each action the call that
-does it.
+functions. The API has two levels:
+
+- **High level — `vh.Project`** (section 0): a measurement folder as the interface sees it. You set the settings of
+  each page, save them in the project file, and run the steps exactly as the pages and the window Batch do. The
+  results and `VelociHub_project.json` are the ones the interface writes, so the project then opens in the
+  interface as you left it. `vh.projects`, `vh.run` and `vh.stitch` do the same for many projects.
+- **Low level** (sections 1-5): the objects of each step (`PODBackgroundRemoval`, `run_piv`/`PIVRun`,
+  `load_vectors`/`PostProcessing`, the batch and archiving functions), for full control in scripts.
 
 ```python
-import velocihub as vh       # the main names: PODBackgroundRemoval, run_piv, Camera, load_vectors, PostProcessing...
+import velocihub as vh       # Project, projects, run, stitch, PODBackgroundRemoval, run_piv, Camera, PostProcessing...
 ```
 
 The processing runs without Tkinter: the interface (`velocihub.gui`) is only imported by `vh.launch_gui()`.
 
 | Module | Contents |
 |---|---|
+| `velocihub.api` | `Project`, `projects`, `run`, `stitch` (also `vh.Project`...) |
+| `velocihub.settings` | The settings of each step as the window Batch and the project file keep them, their conversions and validation, the export specification (`export_spec`, `export_options`) |
 | `velocihub.preprocessing` | `PODBackgroundRemoval`, `ContrastSettings`, `Mask`, filters (`intensity_capping`, `minmax_normalization`, `clahe`, `edge_enhancement`), `imread`, `imwrite` |
 | `velocihub.piv` | `run_piv`, `PIVRun`, `Camera`, `get_engine`, `ENGINES`, `PIVEngine`, `register`, `count_particles`, `check_regression` |
+| `velocihub.piv.displacements` | `pair_displacements`, `pair_particles`, `read_tracks`, `grid_pixels` (the displacement views of the PIV/PTV page) |
 | `velocihub.fields` | `load_vectors`, `VectorFields`, `FieldSettings` |
 | `velocihub.postprocessing` | `PostProcessing`, `PostSettings`, `FIGURES`, `FIGURE_GROUPS`, `INSTANTANEOUS` |
 | `velocihub.batch` | Batch functions ([batch-processing.md](batch-processing.md)) |
-| `velocihub.project`, `velocihub.workspace` | Project and workspace files |
-| `velocihub.archiving` | `archive`, `post_archive` ([archiving.md](archiving.md)) |
+| `velocihub.project`, `velocihub.workspace` | Project and workspace files (`read_project`, `Workspace`) |
+| `velocihub.archiving` | `archive`, `post_archive`, `alignment` ([archiving.md](archiving.md)) |
+| `velocihub.prefs` | `getpref`, `setpref` (the preferences, `~/.velocihub.json`) |
+
+---
+
+## 0. High level — `vh.Project`
+
+```python
+import velocihub as vh
+
+p = vh.Project("D:/Jet/FOV_1/Run_30")      # reads VelociHub_project.json (interface defaults if there is none)
+
+# Page Pre-processing
+p.set_preprocessing(masks="D:/Jet/masks.json",            # or a list of polygons [[x, y], ...]
+                    filters=["capping"], stage="post", cap_n=10,
+                    modes_removed=6)                       # 0: no background removal
+# Page PIV/PTV
+p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
+# p.set_piv(engine="TracTrac", particle_size=3, vid_loop=2, regression="spicy")
+# Page Post-processing and its window Quantities
+p.set_postprocessing(camera=vh.Camera(196.1, x_offset_mm=0, frame_rate_hz=150),
+                     outlier_k=4, use_u_ref=True, l_ref=50, core_level=95,      # any PostSettings field
+                     figures=["mean_velocity", "u_rms", "core_map", "velocity"],
+                     maps=(1, 100, 10),                    # instantaneous figures of maps 1, 11, ..., 91
+                     videos=["velocity"], fps=24, video_format="mp4", video_maps=(1, None, 1),
+                     cmaps={"mean_velocity": "magma"}, contours={"mean_velocity": 0.95},
+                     compares={"mean_velocity": ("u_rms", 0.5)})
+p.save()                    # the settings in the project file, as the window Batch saves them
+p.run()                     # Run step > Singular of the three pages: preprocess(), run_piv(), postprocess()
+```
+
+| Interface | `Project` |
+|---|---|
+| Opening a folder in the interface | `vh.Project(folder)`; `p.reload()` reads the file again |
+| The side panels (settings of each page) | `p.set_preprocessing(...)`, `p.set_piv(...)`, `p.set_postprocessing(...)`; the settings themselves: `p.preprocessing`, `p.piv`, `p.postprocessing` (dictionaries, editable) |
+| Settings saved in the project | `p.save()` |
+| File > Project name... | `p.set_name("Jet_30")` |
+| Pre-processing > Run step > Singular | `p.preprocess()` → `BatchResult` |
+| PIV/PTV > Run step > Singular | `p.run_piv(force=False)` → `BatchResult` (pre-processes first if needed; continues a stopped run) |
+| Post-processing > Run step > Singular | `p.postprocess(overwrite=False)` → `(status, message)` |
+| The three steps | `p.run(steps=("preprocessing", "piv", "postprocessing"))` |
+| The images, the results | `p.images`, `p.results_folders()` (`{"PIV": ..., "PTV": ...}`), `p.name` |
+| The POD session of the page Pre-processing | `with p.session() as s: ...` (recipe applied, modes saved restored) |
+| The vector fields / the post-processing of the page | `p.vector_fields()`, `p.post_processing()` (then `.plot(key)`, `.metrics()`, `.export(...)`) |
+
+`set_preprocessing(masks, masks_file, contrast, filters, stage, background_removal, modes_removed, export_folder,
+**filter_parameters)`, `set_piv(engine, settings, regression, output_folder, **engine_settings)` and
+`set_postprocessing(results, space, camera, settings, export_folder, figures, videos, fps, video_format, video_maps,
+maps, clims, cmaps, contours, compares, **recipe)` change only what they are given. The parameters are those of the
+pages ([preprocessing.md](preprocessing.md), [processing.md](processing.md),
+[postprocessing.md](postprocessing.md)); invalid values raise `ValueError` as the interface refuses them.
+
+### Many projects: `vh.projects`, `vh.run`
+
+```python
+items = vh.projects("D:/Jet")                       # every project under the root (as the panel Projects finds them)
+items = vh.projects("D:/Jet/VelociHub_workspace.json")   # or those of a workspace file
+for p in items:
+    if "FOV_2" in p.folder:
+        p.set_postprocessing(camera=vh.Camera(196.5, x_offset_mm=120, frame_rate_hz=150))
+    p.set_piv(overlap=75)
+    p.save()
+vh.run("piv", items)                                # the window Batch: each project with its own settings
+vh.run("postprocessing", items, overwrite=True)
+```
+
+`vh.run(step, items, force=False, overwrite=False, verbose=True)` returns `[(project, result)]`; a project that fails
+doesn't stop the others.
+
+### Stitching: `vh.stitch`
+
+```python
+vh.stitch(["D:/Jet/FOV_1/Run_30", "D:/Jet/FOV_2/Run_30", "D:/Jet/FOV_3/Run_30"],   # the reference first
+          setup="Run_30", MATCH_VELOCITY=True)
+```
+
+Each project needs the physical space (a camera with its offsets). Each is post-processed with the quantities of the
+reference. The fields of view are then stitched into `Stitched/` in the reference's export folder; the figures, maps
+and videos stitched are those of the reference's export. Keyword options are settings of
+`velocihub.archiving.post_archive`.
 
 ---
 
@@ -132,6 +220,14 @@ vectors = vh.run_piv(images, engine="TracTrac", settings={"particle_size": 3, "v
 |---|---|
 | S/N threshold, diameter, windows | `found = vh.piv.count_particles(image, center=(960, 600), sizes=(64, 32, 16), snr=4, diameter=3)` → `found["windows"]` (each `size`, `count`), `found["background"]`, `found["noise"]` |
 
+### Displacements of a pair (views of the image tile)
+
+| Interface | API |
+|---|---|
+| Tile menu: Displacement \|d\|, d_x, d_y | `from velocihub.piv import displacements` — `d = displacements.pair_displacements(vh.load_vectors(path, pixels=True), k)`: `d["kind"]` is `"grid"` (PIV, 2D arrays) or `"particles"` (PTV, the particles tracked in both images, 1D arrays); `d["x"], d["y"]` in px from the top-left corner, `d["dx"], d["dy"]` in px (y upwards) |
+| Colour limits of the views | `displacements.displacement_limits(key, values)` with key `"displacement"`, `"displacement_x"` or `"displacement_y"` |
+| The tracks of a PTV | `T = displacements.read_tracks(fields.tracks)`; `displacements.pair_particles(T, k)` |
+
 ### Reading the results
 
 ```python
@@ -236,6 +332,19 @@ base, entries = ap.archive_entries(units, categories)         # (path, name in t
 errors = ap.write_archive("X:/Archives/Jet.zip", entries, "zip",
                           lambda errors: ap.archive_summary(units, categories, base, "zip", errors),
                           ap.Progress(sum(size for _, _, size in entries)))   # total bytes, for its progress
+```
+
+The alignment window (Align the stitching) without the interface:
+
+```python
+from velocihub.archiving import alignment
+
+ref = alignment.background("D:/Jet/FOV_1/Run_30", fov_width_mm=196.1)                  # "Mean raw image"
+mov = alignment.background("D:/Jet/FOV_2/Run_30", fov_width_mm=196.5,
+                           kind="Calibration image", root="D:/Jet")                    # or "Mean velocity |u|"
+offset, quality = alignment.suggest_offset(ref, (0, 0), mov, (120, 0), radius_mm=10)   # Suggest
+# quality > 1.5: clear peak; < 1.15: likely wrong. Then: set_postprocessing(camera=Camera(..., x_offset_mm=offset[0],
+# y_offset_mm=offset[1])) for that project
 ```
 
 Details: [archiving.md](archiving.md).

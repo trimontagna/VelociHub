@@ -701,9 +701,6 @@ def main(archive=ARCHIVE, setups=None, export_root=None, stitched_folder=STITCHE
 
 def cli(argv=None):
     """The command line (velocihub-post-archive)."""
-    from velocihub.cli import safe_output
-
-    safe_output()
     parser = argparse.ArgumentParser(prog="velocihub-post-archive", description="Post-processing of the archive (batch API of VelociHub) and stitching "
                                                  "of the fields of view of each setup")
     parser.add_argument("archive", nargs="?", default=ARCHIVE, help="the archive folder (FOV_1, FOV_2...)")

@@ -975,11 +975,6 @@ def print_units(units, categories, base, entries):
 
 
 def main():
-    for stream in (sys.stdout, sys.stderr):  # Characters the console can't encode: ?, not an error
-        try:
-            stream.reconfigure(errors="replace")
-        except (AttributeError, ValueError):
-            pass
     default_folders = os.path.join(os.getcwd(), "folders.txt")
     keys = [key for key, _, _ in CATEGORIES]
     parser = argparse.ArgumentParser(

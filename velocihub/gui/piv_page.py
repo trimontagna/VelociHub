@@ -36,7 +36,11 @@ from ..piv.particles import DEFAULT_DIAMETER, DEFAULT_SNR, MIN_PARTICLES, count_
 from ..preprocessing import describe_images, folder_images, imread, imwrite, num2str, rasterize_masks, same_path
 from ..project import format_duration, piv_results, run_time
 from .batch_dialog import BatchStep, Field, PanelForm, PanelPage, run_batch
-from .widgets import FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, SidePanel, getpref, setpref
+from .widgets import FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, SidePanel
+from ..prefs import getpref, setpref
+from ..settings import (piv_from_project, piv_to_project, validate_piv)
+from ..piv.displacements import (displacement_component, displacement_limits, grid_pixels, pair_particles,
+                                 read_tracks)
 
 # Seconds per pair to estimate the time of a PIV before the first one is measured
 SECONDS_PER_PAIR = 0.6
@@ -70,8 +74,6 @@ PARTICLES_BACKGROUND = "#7a808c"
 # displacements (the same for all the pairs)
 ARROWS = 32
 LIMIT_MAPS = 50
-# Arrays of tracks.npz read to draw the particles tracked
-TRACK_ARRAYS = ("frame", "id", "x", "y", "u", "v")
 
 
 # Detection of the particles of the interrogation windows: signal-to-noise ratio and diameter
@@ -121,63 +123,6 @@ def single_map(fields, k):
     return dataclasses.replace(fields, **one)
 
 
-def read_tracks(path):
-    """The particles tracked by a PTV (TRACK_ARRAYS of tracks.npz), in the order of their frames."""
-    with np.load(path) as z:
-        T = {q: z[q] for q in TRACK_ARRAYS}
-    if T["frame"].size and (np.diff(T["frame"]) < 0).any():
-        order = np.argsort(T["frame"], kind="stable")
-        T = {q: a[order] for q, a in T.items()}
-    return T
-
-
-def pair_particles(T, k):
-    """Displacements of the particles tracked over the pair k (the frames k and k + 1 of the tracks T, read_tracks):
-    the particles of both frames, at the middle of their displacement (px from the top-left corner of the images) and
-    their displacement (px, y upwards). The tracks have no row at the first and last frames of the sequence: for the
-    pairs there, the particles of their other frame with their velocity (px per frame: the mean of their
-    displacements from the frame before and to the frame after; linked False). None without particles."""
-    frame = T["frame"]
-    lo, mid, hi = np.searchsorted(frame, [k, k + 1, k + 2])
-    if lo < mid and mid < hi:
-        a, b = slice(lo, mid), slice(mid, hi)
-        _, i, j = np.intersect1d(T["id"][a], T["id"][b], return_indices=True)
-        x0, y0, x1, y1 = T["x"][a][i], T["y"][a][i], T["x"][b][j], T["y"][b][j]
-        x, y, dx, dy, linked = (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y0 - y1, True
-    elif lo < hi:
-        rows = slice(lo, hi)
-        x, y, dx, dy, linked = T["x"][rows], T["y"][rows], T["u"][rows], -T["v"][rows], False
-    else:
-        return None
-    ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(dx) & np.isfinite(dy)
-    if not ok.any():
-        return None
-    return dict(x=np.asarray(x[ok], np.float64), y=np.asarray(y[ok], np.float64),
-                dx=np.asarray(dx[ok], np.float64), dy=np.asarray(dy[ok], np.float64), linked=linked)
-
-
-def displacement_component(key, dx, dy):
-    """The quantity of the map key of displacements dx, dy: |d|, d_x or d_y."""
-    return {"displacement": lambda: np.hypot(dx, dy), "displacement_x": lambda: dx,
-            "displacement_y": lambda: dy}[key]()
-
-
-def displacement_limits(key, F):
-    """Colour limits of the displacements F of the map key (99th percentile, as the maps of the post-processing):
-    from 0 for |d|, symmetric around 0 for d_y."""
-    v = np.asarray(F, np.float64)
-    v = v[np.isfinite(v)]
-    if not v.size:
-        return 0.0, 1.0
-    if key == "displacement":
-        return 0.0, float(np.percentile(v, 99)) or 1.0
-    if key == "displacement_y":
-        d = float(np.percentile(np.abs(v), 99)) or 1.0
-        return -d, d
-    low, high = float(np.percentile(v, 1)), float(np.percentile(v, 99))
-    return (low, high) if high > low else (low - 0.5, high + 0.5)
-
-
 def engine_label(cls):
     """Name of an engine in the menus, with its method: PaIRS-UniNa (PIV), TracTrac (PTV)."""
     return f"{cls.name} ({cls.method})"
@@ -219,58 +164,6 @@ def piv_fields(settings):
                                  f"(↺: {engine.results_folder}). "
                                  "Set per project, not on folders."), project_only=True),
                      Field(("engine_settings",), "Settings of the other software", "hidden", project_only=True)]
-
-
-def piv_to_project(section, settings):
-    """The section piv of a project file with the batch settings of the PIV: the engine and its settings (those
-    of the other engines and the particles kept), the results folder (the results kept)."""
-    engine = piv.get_engine(settings.get("engine"), **(settings.get("options") or {}))
-    saved = dict(section.get("settings") or {})
-    engines = {**(saved.get("engine_settings") or {}), **(settings.get("engine_settings") or {}),
-               engine.key: dict(settings.get("settings") or {})}
-    out = {**section, "settings": {**saved, "engine": engine.name, "engine_settings": engines}}
-    if "regression" in settings:
-        out["settings"]["regression"] = settings["regression"]
-    if "output_folder" in settings:
-        out["output_folder"] = settings["output_folder"]
-    return out
-
-
-def piv_from_project(section):
-    """The batch settings of the PIV of the section piv of a project file: its engine and its settings, its results
-    folder (ValueError without engine)."""
-    saved = section.get("settings") or {}
-    engine = piv.get_engine(saved.get("engine"))
-    engines = {k: dict(v) for k, v in (saved.get("engine_settings") or {}).items() if isinstance(v, dict)}
-    return {"engine": engine.key, "options": getpref("piv_engine_options", {}).get(engine.key, {}),
-            "settings": engines.pop(engine.key, {}), "settings_engine": engine.key, "engine_settings": engines,
-            "regression": saved.get("regression") or {"method": "none", "settings": {}},
-            "output_folder": section.get("output_folder")}
-
-
-def validate_piv(settings):
-    """Batch settings of the PIV checked by its engine: ValueError with a message. The software changed (engine:
-    not that of the settings, settings_engine): the settings of the previous one kept (engine_settings), those of
-    the new one: those it had, else its defaults, with its options."""
-    key = piv.get_engine(settings.get("engine")).key
-    owner = settings.get("settings_engine") or key
-    if owner != key:
-        kept = dict(settings.get("engine_settings") or {})
-        kept[owner] = dict(settings.get("settings") or {})
-        settings = {**settings, "engine": key, "settings": kept.pop(key, {}), "engine_settings": kept,
-                    "options": getpref("piv_engine_options", {}).get(key, {})}
-    settings = {**settings, "engine": key, "settings_engine": key}
-    engine = piv.get_engine(key, **(settings.get("options") or {}))
-    engine.check({k: v for k, v in (settings.get("settings") or {}).items()})
-    piv.check_regression(settings.get("regression"))
-    # The settings of SPICY completed with their defaults (as the page shows them), also without regression: the
-    # projects compare whatever their files keep
-    regression = dict(settings.get("regression") or {})
-    given = dict(regression.get("settings") or {})
-    regression["settings"] = {p.key: given[p.key] if p.key in given else p.format(p.default)
-                              for p in piv.SPICY_PARAMETERS}
-    regression.setdefault("method", "none")
-    return {**settings, "regression": regression}
 
 
 class PIVPanel(SidePanel):
@@ -558,7 +451,6 @@ class PIVPanel(SidePanel):
         self.pair_button.configure(state=state)
         self.run_button.configure(text="Stop   (F5)" if running else "Singular   (F5)",
                                   state=tk.DISABLED if testing else tk.NORMAL)
-
 
 
 def panel_labels():
@@ -1426,9 +1318,8 @@ class PIVPage(Page):
 
     @staticmethod
     def grid_pixels(fields):
-        """Positions of the vectors in the image (px from its top-left corner): the vector fields read in pixels
-        have y upwards from the middle of the height of the image."""
-        return fields.x, fields.settings["image_px"][1] / 2 - fields.y
+        """Positions of the vectors in the image (px from its top-left corner): displacements.grid_pixels."""
+        return grid_pixels(fields)
 
     def show_monitor(self, current_only=False, upto=None):
         """Quality of the pairs computed, the pair shown marked: valid vectors and median correlation peak ratio

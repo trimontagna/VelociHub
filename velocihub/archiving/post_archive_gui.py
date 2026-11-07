@@ -27,9 +27,11 @@ import numpy as np
 import velocihub as vh
 from velocihub.archiving import post_archive as r
 from velocihub.fields import num2str
-from velocihub.gui.postprocessing_page import (CORE_MODE_HELP, L_REF_HELP, REFERENCE_SETTINGS, ROLLING_HELP,
-                                         SETTINGS as PAGE_SETTINGS, ExportDialog, export_choice, export_maps)
-from velocihub.gui.widgets import HelpDot, PathBox, getpref, setpref
+from velocihub.gui.postprocessing_page import (CORE_MODE_HELP, L_REF_HELP, REFERENCE_SETTINGS, ROLLING_HELP, SETTINGS as
+                                               PAGE_SETTINGS, ExportDialog)
+from velocihub.settings import export_choice, export_maps
+from velocihub.gui.widgets import HelpDot, PathBox
+from velocihub.prefs import getpref, setpref
 from velocihub.postprocessing import CORE_MODES, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES
 
 # The folder of the package velocihub (where python -m finds it when it isn't installed)

@@ -10,7 +10,6 @@ For information, feedback and bug report, please visit the website:
 http://seis.bris.ac.uk/~aexrt/PIVPODPreprocessing
 This software is distributed under the CC BY-NC-SA 4.0 license by Creative Common."""
 
-import copy
 import json
 import os
 import tkinter as tk
@@ -29,8 +28,9 @@ from ..preprocessing import (DEFAULT_CONTRAST, DEFAULT_MODES, FILTERS, MODE_LABE
                              polygon_centroid, read_manifest, same_path, segment_distance, str2double)
 from ..project import comparable_recipe, relative
 from .batch_dialog import BatchStep, Field, PanelForm, PanelPage, run_batch
-from .widgets import (FigurePanel, FolderEntry, HelpDot, Page, PathBox, SidePanel, alive, bring_to_front, getpref,
-                      magic, setpref)
+from .widgets import FigurePanel, FolderEntry, HelpDot, Page, PathBox, SidePanel, alive, bring_to_front, magic
+from ..prefs import getpref, setpref
+from ..settings import (preprocessing_from_project, preprocessing_to_project, validate_preprocessing)
 
 IMAGE_FILES = [("Image files", "*.tif *.tiff *.bmp *.png *.jpg *.gif *.raw"), ("All files", "*.*")]
 MASK_FILES = [("Masks", "*.json"), ("All files", "*.*")]
@@ -82,43 +82,6 @@ def preprocessing_fields(section):
                         help=("Folder of the images exported, relative to each project (↺: PreProcessing). Set "
                               "per project, not on folders."), project_only=True))
     return fields
-
-
-def preprocessing_to_project(section, settings):
-    """The section preprocessing of a project file with the batch settings of the pre-processing (the rest kept:
-    the spectrum and the modes saved, the last export, the automatic threshold)."""
-    out = {**section, **{k: settings[k] for k in ("masks", "contrast", "export_folder", "masks_file")
-                         if k in settings}}
-    # The masks of the file: those of the project (the interface shows them)
-    if settings.get("masks_file"):
-        try:
-            out["masks"] = masks_from_file(settings["masks_file"])
-        except ValueError:
-            pass
-    out["background_removal"] = {**(section.get("background_removal") or {}),
-                                 **(settings.get("background_removal") or {})}
-    return out
-
-
-def preprocessing_from_project(section):
-    """The batch settings of the pre-processing of the section preprocessing of a project file."""
-    return {k: copy.deepcopy(section[k]) for k in ("masks", "contrast", "background_removal", "export_folder",
-                                                    "masks_file") if k in section}
-
-
-def validate_preprocessing(section):
-    """Batch settings of the pre-processing checked: ValueError with a message (the file of masks: one that can be
-    read; none: masks_file None)."""
-    section = {**section, "masks_file": section.get("masks_file") or None}
-    if section["masks_file"]:
-        masks_from_file(section["masks_file"])
-    known = {f.name for f in dataclass_fields(ContrastSettings)}
-    contrast = {k: v for k, v in (section.get("contrast") or {}).items() if k in known}
-    ContrastSettings(**{**contrast, "filters": tuple(contrast.get("filters") or ())})
-    bgrem = section.get("background_removal") or {}
-    if bgrem.get("enabled") and not str2double(bgrem.get("modes_removed")) >= 1:
-        raise ValueError("POD modes removed: at least 1 with the background removal")
-    return section
 
 
 BATCH_MASKS_HINT = ("The masks of the project (drawn in the page Pre-processing): click ☑/☐ to enable or disable a "
@@ -422,7 +385,6 @@ class ControlPanel(SidePanel):
                 self.show_contrast_settings(self.page.contrast)
         finally:
             self.busy = False
-
 
 
 class PrePage(PanelPage):

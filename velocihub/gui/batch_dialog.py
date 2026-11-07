@@ -532,16 +532,6 @@ class PanelForm(ttk.Frame):
     inner = property(lambda self: self.extra.inner)
     widgets = property(lambda self: self.extra.widgets)
 
-    def unify_all(self):
-        """The settings of the panel that differ between the projects of the node: the values shown for all."""
-        for path in sorted(self.differs):
-            if self.fields[path].kind != "multi":
-                self.unify_callback(self.fields[path])
-        for path, choices in self.differ_choices.items():
-            for choice in sorted(choices):
-                self.choice_callback(self.fields[path], choice,
-                                     choice in (get_path(self.shown, path, self.fields[path].default) or []))
-
     # The subclasses
     def make_panel(self):
         raise NotImplementedError

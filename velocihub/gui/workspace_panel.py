@@ -16,7 +16,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from ..project import PROJECT_FILE, PROJECT_FILES, clean_name, read_project, write_project
 from ..workspace import WORKSPACE_FILE, Workspace, key
-from .widgets import HelpDot, getpref, setpref, winopen
+from .widgets import HelpDot, winopen
+from ..prefs import getpref, setpref
 
 WORKSPACE_FILES = [("VelociHub workspace", "*.json"), ("All files", "*.*")]
 PROJECT_FILES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json")]

@@ -51,7 +51,23 @@ results of the three steps), batch (pre-processing and PIV of measurement folder
 (the Tkinter interface).
 """
 
-from . import batch, piv
+import sys
+
+
+def _console_safe():
+    """The messages of VelociHub use characters (→, σ, ω...) that some consoles can't encode (cp1252 on Windows, output
+redirected to a file): printed as ? instead of stopping the processing."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+_console_safe()
+
+from . import api, batch, piv, settings  # noqa: E402 (after the console made safe)
+from .api import Project, projects, run, stitch
 from .credits import AUTHOR as __author__, __version__
 from .piv import FOV_PRESETS, PIV_FOLDER, Camera, PIVEngine, PIVRun, get_engine, register, run_piv
 from .fields import VectorFields, load_vectors
@@ -61,7 +77,7 @@ from .preprocessing import (FILTERS, POD_FILE, PREPROCESSING_FOLDER, STAGES, Con
                             intensity_capping, minmax_normalization)
 from .project import PROJECT_FILE, read_project
 
-__all__ = ["__author__", "__version__", "batch", "Camera", "ContrastSettings", "FIGURES", "FILTERS", "FOV_PRESETS", "Mask", "PIVEngine",
+__all__ = ["__author__", "__version__", "Project", "api", "batch", "projects", "run", "settings", "stitch", "Camera", "ContrastSettings", "FIGURES", "FILTERS", "FOV_PRESETS", "Mask", "PIVEngine",
            "PIVRun", "PIV_FOLDER", "PODBackgroundRemoval", "POD_FILE", "POSTPROCESSING_FOLDER", "PREPROCESSING_FOLDER",
            "PROJECT_FILE", "PostProcessing", "PostSettings", "STAGES", "VectorFields", "clahe", "draw_spectrum",
            "edge_enhancement", "get_engine", "imread", "imwrite", "intensity_capping", "launch_gui", "load_vectors",

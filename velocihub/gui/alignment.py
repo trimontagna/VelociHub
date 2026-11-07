@@ -19,136 +19,20 @@ Suggest: the shift of the field of view selected over the others that best corre
 correlation of the background, its large scales left out), within a search range around where it is: only shown,
 to be checked, as any position, before Apply."""
 
-import os
 import tkinter as tk
-import warnings
 from tkinter import messagebox, ttk
 
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from PIL import Image
 from scipy import ndimage
 
-from ..fields import VECTORS_FILE, load_vectors
-from ..piv import Camera, PIV_FOLDER
-from ..workspace import image_names
+from ..archiving.alignment import BACKGROUNDS, LOADERS, phase_shift
 
-BACKGROUNDS = ("Mean raw image", "Mean velocity |u|", "Calibration image")
 VIEWS = ("Blend", "Difference", "Flicker")
-# The raw images of the mean (evenly spaced), their width at most (block means), the pixels of the composite at most
-MEAN_IMAGES = 40
-MAX_WIDTH = 1000
 MAX_PIXELS = 1.5e6
-CALIBRATION = "Calibration"
 COLOURS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf")
-
-
-class Source:
-    """A background of a field of view: arr (rows downwards, normalised 0 to 1, NaN where there is none), its pixel
-    (mm), and its left and top edges (mm) without the offsets of the field of view."""
-
-    def __init__(self, arr, pixel, left, top):
-        finite = arr[np.isfinite(arr)]
-        low, high = np.percentile(finite, (1, 99)) if finite.size else (0.0, 1.0)
-        self.arr = np.clip((arr - low) / ((high - low) or 1.0), 0, 1).astype(np.float32)
-        self.pixel, self.left, self.top = float(pixel), float(left), float(top)
-
-
-def read_image(path, reduce):
-    with Image.open(path) as im:
-        im = im.convert("F") if im.mode not in ("F", "I;16", "I") else im
-        arr = np.asarray(im, np.float32)
-    if reduce > 1:
-        h, w = arr.shape[0] // reduce * reduce, arr.shape[1] // reduce * reduce
-        arr = arr[:h, :w].reshape(h // reduce, reduce, w // reduce, reduce).mean(axis=(1, 3))
-    return arr
-
-
-def image_source(paths, fov_width_mm, median=True):
-    """The background of images (the median of them; their width: that of the field of view)."""
-    with Image.open(paths[0]) as im:
-        width = im.size[0]
-    reduce = max(1, int(np.ceil(width / MAX_WIDTH)))
-    stack = [read_image(p, reduce) for p in paths]
-    arr = np.median(np.stack(stack), axis=0) if median and len(stack) > 2 else np.mean(stack, axis=0)
-    pixel = fov_width_mm / width * reduce
-    return Source(arr, pixel, 0.0, arr.shape[0] * pixel / 2)
-
-
-def mean_image(project, camera):
-    names = image_names(project.folder)
-    if not names:
-        return None
-    picked = [names[int(i)] for i in np.linspace(0, len(names) - 1, min(MEAN_IMAGES, len(names)))]
-    return image_source([os.path.join(project.folder, n) for n in picked], camera["fov_width_mm"])
-
-
-def calibration_image(project, camera):
-    """The first image of a folder Calibration in the project or above it (up to its root)."""
-    here, root = os.path.normpath(project.folder), os.path.normpath(project.root or project.folder)
-    while True:
-        folder = os.path.join(here, CALIBRATION)
-        names = image_names(folder) if os.path.isdir(folder) else []
-        if names:
-            return image_source([os.path.join(folder, names[0])], camera["fov_width_mm"], median=False)
-        if os.path.normcase(here) == os.path.normcase(root) or os.path.dirname(here) == here:
-            return None
-        here = os.path.dirname(here)
-
-
-def mean_velocity(project, camera):
-    maps = os.path.join(project.folder, PIV_FOLDER, VECTORS_FILE)
-    if not os.path.isfile(maps):
-        maps = os.path.join(project.folder, VECTORS_FILE)
-    if not os.path.isfile(maps):
-        return None
-    fields = load_vectors(maps, camera=Camera(fov_width_mm=float(camera["fov_width_mm"]), x_offset_mm=0.0,
-                                              y_offset_mm=0.0, frame_rate_hz=float(camera["frame_rate_hz"])))
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        speed = np.nanmean(np.hypot(fields.U, fields.V), axis=0)
-    x, y = fields.x[0], fields.y[:, 0]
-    pixel = float(np.median(np.diff(x)))
-    # Rows downwards (y upwards in the vector fields)
-    arr = speed[::-1] if y[-1] > y[0] else speed
-    return Source(arr, pixel, float(x.min()) - pixel / 2, float(y.max()) + pixel / 2)
-
-
-LOADERS = {BACKGROUNDS[0]: mean_image, BACKGROUNDS[1]: mean_velocity, BACKGROUNDS[2]: calibration_image}
-
-
-def phase_shift(a, b, radius):
-    """The shift (rows, columns; subpixel) of b that best matches a (a(x) ≈ b(x - shift)), within radius pixels:
-    phase correlation of the two (NaN: their mean; the large scales left out, a Hann window). Returns (shift,
-    quality: the peak over the next highest one)."""
-    def prepared(arr):
-        arr = np.where(np.isfinite(arr), arr, np.nanmean(arr))
-        arr = arr - ndimage.gaussian_filter(arr, 8)
-        return arr * np.outer(np.hanning(arr.shape[0]), np.hanning(arr.shape[1]))
-    fa, fb = np.fft.fft2(prepared(a)), np.fft.fft2(prepared(b))
-    cross = fa * np.conj(fb)
-    r = np.fft.ifft2(cross / (np.abs(cross) + 1e-12)).real
-    r = np.fft.fftshift(r)
-    centre = np.array(r.shape) // 2
-    rows, cols = np.indices(r.shape)
-    r[np.hypot(rows - centre[0], cols - centre[1]) > radius] = -np.inf
-    peak = np.unravel_index(np.argmax(r), r.shape)
-    shift = []
-    for axis in (0, 1):
-        k = peak[axis]
-        before = r[(k - 1, peak[1]) if axis == 0 else (peak[0], k - 1)] if k > 0 else -np.inf
-        after = r[(k + 1, peak[1]) if axis == 0 else (peak[0], k + 1)] if k < r.shape[axis] - 1 else -np.inf
-        top = r[peak]
-        sub = 0.0
-        if np.isfinite(before) and np.isfinite(after) and before - 2 * top + after < 0:
-            sub = 0.5 * (before - after) / (before - 2 * top + after)
-        shift.append(k - centre[axis] + sub)
-    masked = r.copy()
-    masked[max(peak[0] - 2, 0):peak[0] + 3, max(peak[1] - 2, 0):peak[1] + 3] = -np.inf
-    second = np.max(masked[np.isfinite(masked)]) if np.isfinite(masked).any() else 0.0
-    return np.array(shift), float(r[peak] / second) if second > 0 else float("inf")
 
 
 class AlignWindow(tk.Toplevel):
