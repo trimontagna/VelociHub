@@ -1,7 +1,7 @@
 # Notice
 
 VelociHub — Copyright (c) 2026 Tristan Montagnier (tristanmontagnier@gmail.com).
-Made with Claude (Anthropic), with input from Filippo, Reda and M.A. Mendez, as part of a PIV Laboratory at the
+Made with Claude (Anthropic), with input from Filippo Vaselli, Reda Lamrani and M.A. Mendez, as part of a PIV Laboratory at the
 von Karman Institute for Fluid Dynamics.
 
 VelociHub is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International licence

@@ -7,7 +7,7 @@ name = "velocihub"
 dynamic = ["version"]
 description = "Pre-processing (POD background removal), PIV/PTV and post-processing of PIV images, with an interface, batch processing and archiving"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "CC-BY-NC-SA-4.0"
 license-files = ["LICENSE", "NOTICE.md", "velocihub/piv/tractrac/LICENSE"]
 authors = [{ name = "Tristan Montagnier", email = "tristanmontagnier@gmail.com" }]
@@ -39,7 +39,7 @@ ptv = ["imutils>=0.5", "parse>=1.19", "h5py>=3.7"]
 regression = ["spicy_vki>=1.1"]
 # MP4 videos (GIF otherwise)
 video = ["imageio-ffmpeg>=0.4"]
-# PaIRS-UniNa in the same environment: only for Python 3.10-3.13 (otherwise a separate environment, see docs)
+# PaIRS-UniNa in the same environment: only up to Python 3.13 (otherwise a separate environment, see docs)
 pairs = ["PaIRS-UniNa>=0.2.12; python_version < '3.14'"]
 all = ["velocihub[ptv,regression,video]"]
 

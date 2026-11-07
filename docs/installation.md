@@ -2,7 +2,7 @@
 
 ## 1. What you need
 
-- **Python 3.10 or later** for VelociHub (tested with 3.12, 3.13 and 3.14).
+- **Python 3.12 or later** for VelociHub (tested with 3.12, 3.13 and 3.14).
 - **A second Python, 3.10 to 3.13, for PaIRS-UniNa**, the PIV engine. PaIRS-UniNa is a compiled library that only
   exists for those versions, so it runs in its own process with its own interpreter. VelociHub finds it among your
   conda environments automatically (or choose its `python.exe` in **Settings > PaIRS Python interpreter...**). If you

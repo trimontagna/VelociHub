@@ -1,6 +1,6 @@
 # Credits
 
-VelociHub was developed by Tristan Montagnier, made with [Claude](https://www.anthropic.com/claude) (Anthropic), with input from Filippo, Reda and M.A. Mendez, as part of a PIV Laboratory at the von Karman Institute for Fluid Dynamics. It uses the open-source software listed below.
+VelociHub was developed by Tristan Montagnier, made with [Claude](https://www.anthropic.com/claude) (Anthropic), with input from Filippo Vaselli, Reda Lamrani and M.A. Mendez, as part of a PIV Laboratory at the von Karman Institute for Fluid Dynamics. It uses the open-source software listed below.
 
 Author: Tristan Montagnier (tristanmontagnier@gmail.com)
 

@@ -18,7 +18,7 @@ everything needed:
   `velocihub-batch` ran the pre-processing and the PIV (PaIRS-UniNa found in its own conda environment) end to end,
   the post-processing exported its figures, TracTrac tracked a sequence, and `velocihub-archive --list` listed the
   project.
-- The code compiles with Python 3.12, 3.13 and 3.14 and uses no syntax or library feature newer than 3.10.
+- Tested with Python 3.12, 3.13 and 3.14 (the minimum, `requires-python = ">=3.12"`).
 
 ## pip
 

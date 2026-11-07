@@ -27,7 +27,7 @@ p.run()           # pre-processing, PIV, post-processing
 ## Quick start
 
 ```bash
-# 1. VelociHub (Python 3.10 or later)
+# 1. VelociHub (Python 3.12 or later)
 git clone https://github.com/RexAttaque/VelociHub.git
 cd VelociHub
 pip install -e ".[all]"            # or: conda env create -f environment.yml
@@ -84,7 +84,7 @@ Tested on Windows 11 with Python 3.12-3.14, numpy 2.5, matplotlib 3.11, PaIRS-Un
 ## Authors and licence
 
 VelociHub was developed by **Tristan Montagnier** (tristanmontagnier@gmail.com), made with
-[Claude](https://www.anthropic.com/claude) (Anthropic), with input from Filippo, Reda and M.A. Mendez, as part of a PIV
+[Claude](https://www.anthropic.com/claude) (Anthropic), with input from Filippo Vaselli, Reda Lamrani and M.A. Mendez, as part of a PIV
 Laboratory at the [von Karman Institute for Fluid Dynamics](https://www.vki.ac.be). It uses open-source code from the
 POD-based background removal of Mendez et al. (2017), PaIRS-UniNa (Paolillo & Astarita, University of Naples Federico
 II), TracTrac (Heyman 2019), SPICY (Sperotto, Ratz & Mendez, VKI) and the scientific Python stack: see

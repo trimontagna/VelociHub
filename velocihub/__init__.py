@@ -2,8 +2,9 @@
 PaIRS-UniNa or PTV with TracTrac, post-processing of the vector fields, batch processing and archiving. Usable from a
 script (this API) or with its interface (launch_gui, the command velocihub).
 
-Author: Tristan Montagnier (tristanmontagnier@gmail.com), made with Claude (Anthropic), with input from Filippo, Reda
-and M.A. Mendez, as part of a PIV Laboratory at the von Karman Institute for Fluid Dynamics. Licence: CC BY-NC-SA 4.0.
+Author: Tristan Montagnier (tristanmontagnier@gmail.com), made with Claude (Anthropic), with input from Filippo
+Vaselli, Reda Lamrani and M.A. Mendez, as part of a PIV Laboratory at the von Karman Institute for Fluid Dynamics.
+Licence: CC BY-NC-SA 4.0.
 The open-source software it uses, their authors and licences: credits.py (Help > Credits in the interface,
 CREDITS.md in the repository).
 
