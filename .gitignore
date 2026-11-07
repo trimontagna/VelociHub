@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+# OneDrive conflict copies
+*-LAPTOP-*
+# Data and results of VelociHub (never committed)
+*.npz
+*.tif
+*.tiff
+*.bmp
+*.png
+!docs/images/*.png
+*.mp4
+*.gif
+VelociHub_project.json
+VelociHub_workspace.json
+VelociHub_archive*.zip

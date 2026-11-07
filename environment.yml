@@ -1,0 +1,26 @@
+# Conda environment to run VelociHub from a clone of the repository (the PIV engine PaIRS-UniNa: environment-pairs.yml)
+#   conda env create -f environment.yml
+#   conda activate velocihub
+#   velocihub
+name: velocihub
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - matplotlib-base
+  - contourpy
+  - pillow
+  - py-opencv
+  - psutil
+  - tk
+  # PTV (TracTrac) and MP4 videos
+  - imutils
+  - parse
+  - h5py
+  - imageio-ffmpeg
+  - pip
+  - pip:
+      - spicy_vki    # regression of the vector fields (optional)
+      - -e .         # VelociHub itself, editable

@@ -1,0 +1,168 @@
+"""Regression of the vector fields of the PIV with SPICY (spicy_vki: constrained radial basis functions, Sperotto,
+Pieraccini & Mendez, von Karman Institute), after the PIV software: each displacement field computed is fitted with
+RBFs on its valid vectors and evaluated on the grid of the PIV, where there is flow (the vectors without particles
+or masked are kept as the PIV gave them). The gaps of the invalid vectors are filled and the noise smoothed;
+vectors.npz keeps the fields of the PIV (raw_u_px, raw_v_px, raw_info) and the residual of each fit.
+
+The regression runs in its own process after the one of the PIV (ChainProcess: spicy_worker.py), by chunks of maps
+saved in the work folder, so that a run stopped continues from the last chunk saved.
+
+Coordinates are divided by the width of the images: the radii of the RBFs are fractions of it."""
+
+import hashlib
+import importlib.util
+import json
+import os
+import sys
+
+from .base import Parameter, PIVProcess, WorkerProcess
+
+# Regressions after the PIV software: key, name
+REGRESSIONS = (("none", "None"), ("spicy", "SPICY"))
+# Maps per chunk saved by the worker
+SPICY_CHUNK = 20
+SPICY_PARAMETERS = (
+    Parameter("basis", "RBF basis", "gauss", "choice",
+              "Gaussian RBFs, or C4 RBFs (compact support: faster, a little less smooth).", ("gauss", "c4")),
+    Parameter("n_k", "Points per RBF (per level)", (4,), "ints",
+              ("Number of vectors each RBF should cover; one number per level of RBFs (e.g. 4 10: a fine and a "
+               "coarse level). Fewer points: more RBFs, a closer fit and a longer regression.")),
+    Parameter("method", "Collocation", "clustering", "choice",
+              ("Where the RBFs are placed: k-means clustering of the vectors, Halton points (semirandom) or a "
+               "regular grid."), ("clustering", "semirandom", "regular")),
+    Parameter("r_min", "RBF radius min (image width)", 0.01,
+              help="Smallest radius of the RBFs, where an RBF is 0.5, as a fraction of the image width."),
+    Parameter("r_max", "RBF radius max (image width)", 0.3,
+              help="Largest radius of the RBFs, as a fraction of the image width."),
+    Parameter("eps_l", "RBF value at the nearest RBF", 0.7,
+              help="Value of an RBF at the nearest other RBF (0 to 1), which sets its radius between the two above."),
+    Parameter("alpha_div", "Divergence penalty (0: none)", 0.0,
+              help=("Penalty on the 2D divergence over the whole field. Leave at 0 for an axisymmetric jet in a "
+                    "plane through its axis: there, du/dx + dv/dy = -v/r, not 0.")),
+    Parameter("n_hb", "Harmonic basis functions", 0, "int",
+              help="Number of sine and cosine functions added to capture global trends (0: none)."),
+    Parameter("k_cond", "Condition number", 1e12,
+              help="Regularization: the matrix of the fit is regularized to this condition number."),
+)
+
+
+def check_regression(regression):
+    """The regression of PIV settings ({"method": key, "settings": {parameter: value}}) completed with the defaults
+    and validated: None if there is none, else {"method": "spicy", "settings": {...}}. ValueError with a message."""
+    regression = regression or {}
+    method = (regression.get("method") or "none").lower()
+    if method not in dict(REGRESSIONS):
+        raise ValueError(f'Unknown regression "{method}": {", ".join(k for k, _ in REGRESSIONS)}')
+    if method == "none":
+        return None
+    given = regression.get("settings") or {}
+    s = {p.key: p.parse(given[p.key]) if p.key in given else p.default for p in SPICY_PARAMETERS}
+    if not 0 < s["r_min"] < s["r_max"]:
+        raise ValueError("SPICY: 0 < RBF radius min < RBF radius max")
+    if not 0 < s["eps_l"] < 1:
+        raise ValueError("SPICY: RBF value at the nearest RBF between 0 and 1")
+    if any(n < 1 for n in s["n_k"]):
+        raise ValueError("SPICY: points per RBF >= 1")
+    if s["alpha_div"] < 0 or s["n_hb"] < 0:
+        raise ValueError("SPICY: divergence penalty and harmonic basis functions >= 0")
+    if not s["k_cond"] > 1:
+        raise ValueError("SPICY: condition number > 1")
+    return {"method": method, "settings": s}
+
+
+def describe_regression(regression):
+    """The regression checked (check_regression), in a line."""
+    if regression is None:
+        return "none"
+    s = regression["settings"]
+    return "SPICY: " + ", ".join(f"{p.label if p.label[:3].isupper() else p.label.lower()} {p.format(s[p.key])}"
+                                 for p in SPICY_PARAMETERS)
+
+
+def regression_text(regression):
+    """The regression checked, as the interface saves it in a project (texts)."""
+    if regression is None:
+        return {"method": "none", "settings": {}}
+    return {"method": regression["method"],
+            "settings": {p.key: p.format(regression["settings"][p.key]) for p in SPICY_PARAMETERS}}
+
+
+def regression_record(regression):
+    """The regression checked, as saved with the results (JSON: tuples as lists)."""
+    return None if regression is None else json.loads(json.dumps(regression))
+
+
+def spicy_available():
+    """(True, description) if SPICY can run (spicy_vki installed with the Python of the interface), else (False,
+    reason)."""
+    if importlib.util.find_spec("spicy_vki") is None:
+        return False, "SPICY is not installed: pip install spicy_vki"
+    return True, "SPICY (spicy_vki)"
+
+
+def start_regression(work, regression, status, width, key):
+    """Start the regression of the displacement fields of the PIV (raw.npz of the work folder) in its own process:
+    status, the grid points with flow (0); width, of the images in pixels; key, of the PIV and the regression (the
+    chunks of another key are discarded). Returns the WorkerProcess, which writes regressed.npz."""
+    ok, reason = spicy_available()
+    if not ok:
+        raise RuntimeError(reason)
+    job = {"work": work, "settings": regression["settings"], "status": status, "width": width,
+           "chunk": SPICY_CHUNK,
+           "key": hashlib.sha1(json.dumps([key, regression_record(regression)], sort_keys=True,
+                                          default=str).encode()).hexdigest()[:16]}
+    return WorkerProcess(sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "spicy_worker.py"),
+                         job, work)
+
+
+class ChainProcess(PIVProcess):
+    """The PIV process, then the one started by then(done) when it is done (the regression). Its own message done is
+    the one of the PIV, with regression_seconds (and regression_resumed: the maps fitted before)."""
+
+    def __init__(self, first, then):
+        self.current, self.then, self.piv_done = first, then, None
+
+    def poll(self):
+        messages = []
+        for message in self.current.poll():
+            if message["type"] == "done" and self.then is not None:
+                self.piv_done, then, self.then = message, self.then, None
+                try:
+                    self.current = then(message)
+                except Exception as e:
+                    messages.append({"type": "error", "text": f"the regression could not start: {e}"})
+                    self.current = _Ended()
+                    break
+                continue
+            if message["type"] == "done" and self.piv_done is not None:
+                message = {**self.piv_done, "regression_seconds": message.get("seconds"),
+                           "regression_resumed": message.get("resumed")}
+            messages.append(message)
+        return messages
+
+    def stop(self):
+        self.current.stop()
+
+    def kill(self):
+        self.current.kill()
+
+    def wait(self, timeout=None):
+        self.current.wait(timeout) if timeout is not None else self.current.wait()
+
+    @property
+    def running(self):
+        return self.then is not None or self.current.running
+
+
+class _Ended(PIVProcess):
+    """A process already ended (the regression that could not start)."""
+
+    def poll(self):
+        return []
+
+    def stop(self):
+        pass
+
+    @property
+    def running(self):
+        return False

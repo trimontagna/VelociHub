@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "velocihub"
+dynamic = ["version"]
+description = "Pre-processing (POD background removal), PIV/PTV and post-processing of PIV images, with an interface, batch processing and archiving"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "CC-BY-NC-SA-4.0"
+license-files = ["LICENSE", "NOTICE.md", "velocihub/piv/tractrac/LICENSE"]
+authors = [{ name = "Tristan Montagnier", email = "tristanmontagnier@gmail.com" }]
+keywords = ["PIV", "PTV", "particle image velocimetry", "POD", "background removal", "fluid dynamics", "jet"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+]
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "matplotlib>=3.6",
+    "contourpy>=1.0",
+    "pillow>=9.0",
+    "opencv-python>=4.6",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+# PTV with TracTrac (vendored in velocihub/piv/tractrac; these are its imports)
+ptv = ["imutils>=0.5", "parse>=1.19", "h5py>=3.7"]
+# Regression of the vector fields with SPICY
+regression = ["spicy_vki>=1.1"]
+# MP4 videos (GIF otherwise)
+video = ["imageio-ffmpeg>=0.4"]
+# PaIRS-UniNa in the same environment: only for Python 3.10-3.13 (otherwise a separate environment, see docs)
+pairs = ["PaIRS-UniNa>=0.2.12; python_version < '3.14'"]
+all = ["velocihub[ptv,regression,video]"]
+
+[project.urls]
+Repository = "https://github.com/RexAttaque/VelociHub"
+Documentation = "https://github.com/RexAttaque/VelociHub/tree/main/docs"
+
+[project.scripts]
+velocihub = "velocihub.cli:gui"
+velocihub-batch = "velocihub.cli:batch"
+velocihub-archive = "velocihub.archiving.archive:main"
+velocihub-post-archive = "velocihub.archiving.post_archive:cli"
+velocihub-post-archive-gui = "velocihub.archiving.post_archive_gui:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "velocihub.credits.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["velocihub*"]
+
+[tool.setuptools.package-data]
+"velocihub.piv.tractrac" = ["LICENSE", "README.txt"]

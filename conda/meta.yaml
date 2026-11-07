@@ -1,0 +1,61 @@
+# conda recipe of VelociHub (noarch: pure Python). Build it with conda-build or rattler-build:
+#   conda build conda -c conda-forge
+# then install the package built:  conda install -c local -c conda-forge velocihub
+# See docs/packaging.md. The optional packages (PTV, regression, videos) are not dependencies of the recipe:
+#   add them to the environment (conda install -c conda-forge imutils parse h5py imageio-ffmpeg).
+{% set version = "1.0.0" %}
+
+package:
+  name: velocihub
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: 0
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
+  entry_points:
+    - velocihub = velocihub.cli:gui
+    - velocihub-batch = velocihub.cli:batch
+    - velocihub-archive = velocihub.archiving.archive:main
+    - velocihub-post-archive = velocihub.archiving.post_archive:cli
+    - velocihub-post-archive-gui = velocihub.archiving.post_archive_gui:main
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=77
+    - wheel
+  run:
+    - python >=3.10
+    - numpy >=1.23
+    - scipy >=1.9
+    - matplotlib-base >=3.6
+    - contourpy >=1.0
+    - pillow >=9.0
+    - py-opencv >=4.6
+    - psutil >=5.9
+    - tk
+    # Optional (PTV, MP4 videos): imutils, parse, h5py, imageio-ffmpeg — conda-forge
+    # Optional (regression): spicy_vki — pip only
+
+test:
+  imports:
+    - velocihub
+    - velocihub.piv
+    - velocihub.archiving.archive
+  commands:
+    - velocihub-batch --help
+    - velocihub-archive --help
+
+about:
+  home: https://github.com/RexAttaque/VelociHub
+  license: CC-BY-NC-SA-4.0
+  license_file:
+    - LICENSE
+    - NOTICE.md
+    - velocihub/piv/tractrac/LICENSE
+  summary: Pre-processing (POD background removal), PIV/PTV and post-processing of PIV images

@@ -1,0 +1,13 @@
+# Separate environment of the PIV engine PaIRS-UniNa (wheels for Python 3.10-3.13 only). VelociHub finds it among the
+# conda environments (or choose its python.exe in Settings > PaIRS Python interpreter...).
+#   conda env create -f environment-pairs.yml
+name: PaIRS
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - numpy
+  - pillow
+  - pip
+  - pip:
+      - PaIRS-UniNa
