@@ -41,7 +41,7 @@ from .workspace_panel import WorkspacePanel
 PAGES = (PreProcessingPage, PIVPage, PostProcessingPage)
 # Position of the main window in normalized screen units [left bottom width height]
 MAIN_POS = [0, 0.05, 1, 0.95]
-PROJECT_FILES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json"), ("All files", "*.*")]
+PROJECT_FILE_TYPES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json"), ("All files", "*.*")]
 # Menus shared by the pages, first and last; the menus of the pages are between them
 FIRST_MENUS = ("File", "Settings")
 # The menus of the pages not shown (their items never used from the menu bar: their keyboard shortcuts kept)
@@ -506,7 +506,7 @@ class MainWindow:
         """Open a project file: its images, with their settings and results."""
         filename = filedialog.askopenfilename(parent=self.parent(), title="Open project...",
                                               initialdir=self.source.image_folder() or os.getcwd(),
-                                              filetypes=PROJECT_FILES)
+                                              filetypes=PROJECT_FILE_TYPES)
         if filename:
             self.open_project_file(filename)
 

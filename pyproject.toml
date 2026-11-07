@@ -41,6 +41,8 @@ regression = ["spicy_vki>=1.1"]
 video = ["imageio-ffmpeg>=0.4"]
 # PaIRS-UniNa in the same environment: only up to Python 3.13 (otherwise a separate environment, see docs)
 pairs = ["PaIRS-UniNa>=0.2.12; python_version < '3.14'"]
+# The tests (tests/, synthetic images: no data needed)
+test = ["pytest>=7"]
 all = ["velocihub[ptv,regression,video]"]
 
 [project.urls]
@@ -62,3 +64,6 @@ include = ["velocihub*"]
 
 [tool.setuptools.package-data]
 "velocihub.piv.tractrac" = ["LICENSE", "README.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

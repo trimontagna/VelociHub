@@ -278,7 +278,8 @@ class Project:
         if needed; skipped if up to date), the project file updated. Returns a batch.BatchResult."""
         project, _ = self._job()
         result = batch.preprocess_folder(self.folder, project["settings"]["preprocessing"])
-        self.reload()
+        if result.status == "done":  # The project file written by the run (skipped: unchanged, the settings kept)
+            self.reload()
         return result
 
     def run_piv(self, force=False, report=None):

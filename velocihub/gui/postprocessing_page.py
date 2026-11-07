@@ -1296,6 +1296,13 @@ class PostProcessingPage(Page):
             self.panel.show(current)
             return
         if settings == current and self.post is not None:
+            # A handle of the POD modes released without changing them: its mode shown
+            handle, self.pod_handle = getattr(self, "pod_handle", None), None
+            if handle is not None and self.post.pod_shown_mode() != self.post.pod_range()[handle]:
+                self.post.pod_shown = self.post.pod_range()[handle]
+                tiles = [t for t in self.tiles if {t.view, t.view2} & imaging.POD_FIGURES]
+                if tiles:
+                    self.redraw(tiles)
             return
         self.panel.save(settings)
         if self.post is not None:

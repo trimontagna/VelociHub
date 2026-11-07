@@ -81,6 +81,12 @@ The full tutorial is in [docs/installation.md](docs/installation.md).
 
 Tested on Windows 11 with Python 3.12-3.14, numpy 2.5, matplotlib 3.11, PaIRS-UniNa 0.2.12 (Python 3.13).
 
+## Tests
+
+`pip install velocihub[test]`, then `python -m pytest` in the repository (about a minute). The tests make their own
+synthetic images of a jet (no data needed): the library, the Python API and batch, the interface (skipped without a
+display) and the PIV/PTV engines installed (PaIRS-UniNa, TracTrac; skipped otherwise).
+
 ## Authors and licence
 
 VelociHub was developed by **Tristan Montagnier** (tristanmontagnier@gmail.com), made with
