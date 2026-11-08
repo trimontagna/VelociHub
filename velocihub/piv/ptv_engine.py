@@ -49,6 +49,7 @@ class TracTracEngine(PIVEngine):
 
     key = "tractrac"
     name = "TracTrac"
+    label = "TracTrac"
     description = "TracTrac PTV: particles tracked over the sequence, their displacements binned on the grid"
     results_folder = PTV_FOLDER
     sequence = True

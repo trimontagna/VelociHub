@@ -31,7 +31,7 @@ It is distributed under the CC BY-NC-SA 4.0 license by Creative Commons. The PIV
                          output="images/PIV", masked=masked)
 
     # 3. Post-processing with the camera settings (figures and key numbers in images/PostProcessing)
-    camera = vh.Camera(fov_width_mm=196.1, x_offset_mm=0, frame_rate_hz=150)
+    camera = vh.Camera(fov_width_mm=196.1, x_offset_mm=0, frame_rate_hz=150, y_shift=0.5)
     fields = vh.load_vectors(vectors, camera=camera)
     post = vh.PostProcessing(fields, vh.PostSettings(outlier_k=4))
     post.export("images/PostProcessing")
@@ -67,10 +67,10 @@ redirected to a file): printed as ? instead of stopping the processing."""
 
 _console_safe()
 
-from . import api, batch, piv, settings  # noqa: E402 (after the console made safe)
+from . import api, batch, jet, pipelines, piv, settings  # noqa: E402 (after the console made safe)
 from .api import Project, projects, run, stitch
 from .credits import AUTHOR as __author__, __version__
-from .piv import FOV_PRESETS, PIV_FOLDER, Camera, PIVEngine, PIVRun, get_engine, register, run_piv
+from .piv import PIV_FOLDER, Camera, PIVEngine, PIVRun, get_engine, register, run_piv
 from .fields import VectorFields, load_vectors
 from .postprocessing import FIGURES, POSTPROCESSING_FOLDER, PostProcessing, PostSettings
 from .preprocessing import (FILTERS, POD_FILE, PREPROCESSING_FOLDER, STAGES, ContrastSettings, Mask,
@@ -78,11 +78,11 @@ from .preprocessing import (FILTERS, POD_FILE, PREPROCESSING_FOLDER, STAGES, Con
                             intensity_capping, minmax_normalization)
 from .project import PROJECT_FILE, read_project
 
-__all__ = ["__author__", "__version__", "Project", "api", "batch", "projects", "run", "settings", "stitch", "Camera", "ContrastSettings", "FIGURES", "FILTERS", "FOV_PRESETS", "Mask", "PIVEngine",
+__all__ = ["__author__", "__version__", "Project", "api", "batch", "pipelines", "projects", "run", "settings", "stitch", "Camera", "ContrastSettings", "FIGURES", "FILTERS", "Mask", "PIVEngine",
            "PIVRun", "PIV_FOLDER", "PODBackgroundRemoval", "POD_FILE", "POSTPROCESSING_FOLDER", "PREPROCESSING_FOLDER",
            "PROJECT_FILE", "PostProcessing", "PostSettings", "STAGES", "VectorFields", "clahe", "draw_spectrum",
            "edge_enhancement", "get_engine", "imread", "imwrite", "intensity_capping", "launch_gui", "load_vectors",
-           "minmax_normalization", "piv", "read_project", "register", "run_piv"]
+           "jet", "minmax_normalization", "piv", "read_project", "register", "run_piv"]
 
 
 def launch_gui(folder=None, pattern=None, masks=None, contrast=None):

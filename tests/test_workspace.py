@@ -86,12 +86,24 @@ def test_projects_followed(tmp_path):
 
 
 def test_piv_and_ptv_results(copy, tmp_path):
-    """A project with PIV and PTV results: both detected (their folders); PTV only: that folder."""
+    """A project with the results of two pipelines: both detected (their folders); TracTrac only: that folder; a
+    workspace file of the previous versions (without the pipelines) read, its results found."""
     copy("both", "campaign", "both")
     copy("ptv", "campaign", "ptv_only")
     ws = Workspace(os.path.join(str(tmp_path), WORKSPACE_FILE))
     ws.add_root(os.path.join(str(tmp_path), "campaign"))
     found = {p.path: p for p in ws.projects}
     both, ptv = found["both"], found["ptv_only"]
-    assert set(both.results_folders()) == {"PIV", "PTV"} and both.ptv and both.images
-    assert list(ptv.results_folders()) == ["PTV"] and ptv.maps.endswith("PTV")
+    assert list(both.results_folders()) == ["PaIRS", "TracTrac"] and both.images
+    assert both.pipelines == {"PaIRS": "PIV", "TracTrac": "PTV"}
+    assert list(ptv.results_folders()) == ["TracTrac"] and ptv.maps.endswith("PTV")
+    ws.save()
+    with open(ws.file, encoding="utf-8") as f:
+        data = json.load(f)
+    for p in data["projects"]:
+        del p["pipelines"]
+        p["ptv"] = True
+    with open(ws.file, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    old = {p.path: p for p in Workspace.load(ws.file).projects}["both"]
+    assert old.pipelines is None and list(old.results_folders()) == ["PaIRS", "TracTrac"]

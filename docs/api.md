@@ -47,8 +47,8 @@ p.set_preprocessing(masks="D:/Jet/masks.json",            # or a list of polygon
 p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
 # p.set_piv(engine="TracTrac", particle_size=3, vid_loop=2, regression="spicy")
 # Page Post-processing and its window Quantities
-p.set_postprocessing(camera=vh.Camera(196.1, x_offset_mm=0, frame_rate_hz=150),
-                     outlier_k=4, use_u_ref=True, l_ref=50, core_level=95,      # any PostSettings field
+p.set_postprocessing(camera=vh.Camera(196.1, x_offset_mm=0, frame_rate_hz=150, y_shift=0.5),
+                     outlier_k=4, use_u_ref=True, l_ref=50, jet_theory=True, core_level=95,  # any PostSettings field
                      figures=["mean_velocity", "u_rms", "core_map", "velocity"],
                      maps=(1, 100, 10),                    # instantaneous figures of maps 1, 11, ..., 91
                      videos=["velocity"], fps=24, video_format="mp4", video_maps=(1, None, 1),
@@ -68,11 +68,11 @@ p.run()                     # Run step > Singular of the three pages: preprocess
 | PIV/PTV > Run step > Singular | `p.run_piv(force=False)` → `BatchResult` (pre-processes first if needed; continues a stopped run) |
 | Post-processing > Run step > Singular | `p.postprocess(overwrite=False)` → `(status, message)` |
 | The three steps | `p.run(steps=("preprocessing", "piv", "postprocessing"))` |
-| The images, the results | `p.images`, `p.results_folders()` (`{"PIV": ..., "PTV": ...}`), `p.name` |
+| The images, the results | `p.images`, `p.results_folders()` (by pipeline: `{"PaIRS": ..., "TracTrac": ...}`; `vh.pipelines`), `p.name`; `p.set_postprocessing(results="TracTrac")` (`"PIV"`, `"PTV"` of the previous versions: their pipeline) |
 | The POD session of the page Pre-processing | `with p.session() as s: ...` (recipe applied, modes saved restored) |
 | The vector fields / the post-processing of the page | `p.vector_fields()`, `p.post_processing()` (then `.plot(key)`, `.metrics()`, `.export(...)`) |
 
-`set_preprocessing(masks, masks_file, contrast, filters, stage, background_removal, modes_removed, export_folder,
+`set_preprocessing(masks, masks_file, contrast, filters, stage, background_removal, modes_removed, export_folder, export_format,
 **filter_parameters)`, `set_piv(engine, settings, regression, output_folder, **engine_settings)` and
 `set_postprocessing(results, space, camera, settings, export_folder, figures, videos, fps, video_format, video_maps,
 maps, clims, cmaps, contours, compares, **recipe)` change only what they are given. The parameters are those of the
@@ -248,7 +248,7 @@ print(f.settings["engine"], f.settings["pairs"][:3])
 | Interface | API |
 |---|---|
 | Vector fields folder | `vh.load_vectors(path)` (`vectors.npz`, its folder, or a folder of DynamicStudio CSV files) |
-| Camera and acquisition | `camera = vh.Camera(fov_width_mm=196.1, x_offset_mm=0, y_offset_mm=0, frame_rate_hz=150)` |
+| Camera and acquisition | `camera = vh.Camera(fov_width_mm=196.1, fov_height_mm=None, x_shift=0, y_shift=0.5, x_offset_mm=0, y_offset_mm=0, frame_rate_hz=150)` (`fov_height_mm` None: square pixels; the origin at `x_shift`, `y_shift` fractions of the field of view from its bottom-left corner; `vh.jet.jet_camera(1)`: a field of view of the jet measurements) |
 | Scale space: Sensor | `fields = vh.load_vectors(path)` |
 | Scale space: Physical | `fields = vh.load_vectors(path, camera=camera)` |
 
@@ -260,12 +260,13 @@ Every box of the side panel is a field of `PostSettings` (table in [postprocessi
 settings = vh.PostSettings(
     outlier_k=4,                       # Statistical outlier filtering
     hold_maps=5,                       # Data Reconstruction (sample and hold)
-    use_u_ref=True, u_ref=None,        # Reference quantities: u_ref (None: max of mean u)
+    use_u_ref=True, u_ref=None,        # Reference quantities: u_ref (None: the highest mean speed)
     use_t_flow=True, t_flow=None,      # ... flow time in s (the interface shows ms)
     l_ref=50,                          # ... reference length (mm)
     rolling=False, rolling_maps=100,   # Rolling statistics
     peak_locking_bins=21,              # Peak locking
-    core_mode="level", core_level=95,  # Jet potential core
+    jet_theory=True,                   # Jet theory add-on (velocihub/jet): the potential core
+    core_mode="level", core_level=95,
     n_stations=6, first_offset=0, core_u_ref=None,
     pod_mode=1, pod_mode_last=None, pod_combine=False)   # POD modes shown/exported
 post = vh.PostProcessing(fields, settings)
@@ -290,9 +291,9 @@ post = vh.PostProcessing(fields, settings)
 | Quantities... + Singular (Ctrl+E) | `post.export(folder, figures=None, index=0, maps=None, videos=(), fps=10, video_maps=None, video_format="gif", clims=None, cmaps=None, contours=None, compares=None, video_options=None, image_options=None, dpi=130, name=None)` |
 
 ```python
-camera = vh.Camera(fov_width_mm=196.1, frame_rate_hz=150)
+camera = vh.Camera(fov_width_mm=196.1, frame_rate_hz=150, y_shift=0.5)
 post = vh.PostProcessing(vh.load_vectors("D:/Jet/Run_30/PIV", camera=camera),
-                         vh.PostSettings(outlier_k=4, use_u_ref=True, l_ref=50))
+                         vh.PostSettings(outlier_k=4, use_u_ref=True, l_ref=50, jet_theory=True))
 files = post.export("D:/Jet/Run_30/PostProcessing",
                     figures=["mean_velocity", "u_rms", "core_map", "velocity", "convergence"],
                     maps=[0, -1],                     # instantaneous figures of the first and last maps
@@ -339,8 +340,8 @@ The alignment window (Align the stitching) without the interface:
 ```python
 from velocihub.archiving import alignment
 
-ref = alignment.background("D:/Jet/FOV_1/Run_30", fov_width_mm=196.1)                  # "Mean raw image"
-mov = alignment.background("D:/Jet/FOV_2/Run_30", fov_width_mm=196.5,
+ref = alignment.background("D:/Jet/FOV_1/Run_30", {"fov_width_mm": 196.1, "y_shift": 0.5})   # "Mean raw image"
+mov = alignment.background("D:/Jet/FOV_2/Run_30", {"fov_width_mm": 196.5, "y_shift": 0.5},
                            kind="Calibration image", root="D:/Jet")                    # or "Mean velocity |u|"
 offset, quality = alignment.suggest_offset(ref, (0, 0), mov, (120, 0), radius_mm=10)   # Suggest
 # quality > 1.5: clear peak; < 1.15: likely wrong. Then: set_postprocessing(camera=Camera(..., x_offset_mm=offset[0],
@@ -381,7 +382,8 @@ from velocihub.piv.base import Parameter
 
 @register
 class MyPIV(PIVEngine):
-    key, name, method = "mypiv", "MyPIV", "PIV"
+    key, name, label, method = "mypiv", "MyPIV", "MyPIV", "PIV"
+    results_folder = "MyPIV"  # Its results in the measurement; its post-processing in PostProcessing/MyPIV
     parameters = (Parameter("window", "Window (px)", 32, "int", "Interrogation window."),)
 
     def available(self):
@@ -393,4 +395,6 @@ class MyPIV(PIVEngine):
         ...
 ```
 
-Registered engines appear in the PIV/PTV page and the batch automatically.
+Registered engines appear in the PIV/PTV page and the batch automatically, and each is a pipeline
+(`velocihub/pipelines.py`): its results in the column Velocimetry of the panel Projects and in the results of the
+batch post-processing, its figures exported to `PostProcessing/[label]`.

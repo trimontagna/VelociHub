@@ -40,7 +40,7 @@ class WorkspacePanel(ttk.Frame):
         self.app = app
         self.ws = Workspace()
         self.items = {}  # Tree item: ("root", folder), ("node", root, path), ("project", Project) or ("results",
-        # Project, method): the results of a method of a project with those of a PIV and of a PTV
+        # Project, pipeline): the results of a pipeline (PaIRS, TracTrac...) of a project with those of several
         self.folded = set()  # Nodes folded (root|path)
         header = ttk.Frame(self)
         header.pack(fill=tk.X)
@@ -58,7 +58,8 @@ class WorkspacePanel(ttk.Frame):
         frame.pack(fill=tk.BOTH, expand=True)
         self.tree = ttk.Treeview(frame, columns=("images", "results"), selectmode="browse")
         self.tree.heading("#0", text="Project", anchor=tk.W)
-        for column, text, width in (("images", "Img", 34), ("results", "PIV/PTV", 62)):
+        # The results of the projects: their velocimetry pipelines (PaIRS, TracTrac...)
+        for column, text, width in (("images", "Img", 34), ("results", "Velocimetry", 110)):
             self.tree.heading(column, text=text)
             self.tree.column(column, width=width, minwidth=30, stretch=False, anchor=tk.CENTER)
         self.tree.column("#0", width=230, minwidth=120)
@@ -185,9 +186,9 @@ class WorkspacePanel(ttk.Frame):
             processed = self.running is not None and key(p.folder) == key(self.running)
             methods = list(p.results_folders())
             self.tree.insert(parent, tk.END, iid=iid, text=("▶ " if processed else "") + p.label(),
-                             values=("✓" if p.images else "", "+".join(methods)), open=iid not in self.folded)
+                             values=("✓" if p.images else "", ", ".join(methods)), open=iid not in self.folded)
             self.items[iid] = ("project", p)
-            # Both results: a row for each
+            # The results of several pipelines: a row for each
             if len(methods) > 1:
                 for method in methods:
                     child = f"results|{method}|{key(p.folder)}"
@@ -218,8 +219,8 @@ class WorkspacePanel(ttk.Frame):
         return not project.lost and (project.images or (not getattr(page, "needs_images", True) and project.results))
 
     def shown_method(self, project):
-        """The method of the results of the project open shown by the post-processing (its maps folder): PIV, PTV,
-        or None (another folder)."""
+        """The pipeline of the results of the project open shown by the post-processing (its maps folder): PaIRS,
+        TracTrac..., or None (another folder)."""
         post = self.app.page("post")
         maps = post.maps_folder() if post is not None else None
         return next((m for m, folder in project.results_folders().items() if maps and key(folder) == key(maps)), None)
@@ -274,8 +275,8 @@ class WorkspacePanel(ttk.Frame):
             self.open(item[1], item[2])
 
     def open(self, project, method=None):
-        """Open a project in the pages (its images, or its PIV/PTV results in the post-processing); method: with its
-        results of this method (PIV, PTV) in the post-processing."""
+        """Open a project in the pages (its images, or its results in the post-processing); method: with its results
+        of this pipeline (PaIRS, TracTrac...) in the post-processing."""
         if project is None:
             return
         current = self.app.project_folder()

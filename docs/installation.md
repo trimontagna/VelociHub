@@ -124,10 +124,10 @@ You can skip step 6: the PIV exports the images itself when it needs them.
 ### Step 3 — Post-processing
 
 1. Open the **Post-processing** page: it loads the results of the PIV page.
-2. **Camera and acquisition**: field of view width `196.1` mm, frame rate `150` Hz (offsets 0 for a single field of
+2. **Camera and acquisition**: field of view width `196.1` mm, origin of y `0.5` (y = 0 on the jet axis), frame rate `150` Hz (offsets 0 for a single field of
    view). **Scale space**: **Physical (mm, s)**.
 3. Set the recipe: **Statistical outlier filtering** 4 σ, **Reference quantities** (u_ref, t_flow, L_ref = 50 mm for
-   a 50 mm nozzle), **Jet potential core**...
+   a 50 mm nozzle), **Jet theory (add-on)** for the potential core of a jet...
 4. Each of the four tiles has a figure menu (mean velocity, RMS, vorticity, turbulence, potential core, quality...),
    a comparison menu (wiper between two maps), a colour map, a colour range and an optional isocontour.
 5. **Export > Quantities...** chooses the figures (and videos); **Singular** (Ctrl+E) writes them to
@@ -147,9 +147,11 @@ Run_30/
   *.tif                         your images (never modified)
   VelociHub_project.json        settings and results of the three pages (restored when reopened)
   PreProcessing/                pre-processed images, preprocessing.json, pod.npz
-  PIV/                          vectors.npz (all the vector fields, in pixels), settings.json
+  PIV/                          vectors.npz (all the vector fields, in pixels), settings.json (PaIRS)
   PTV/                          the same for TracTrac, with tracks.npz
-  PostProcessing/               PNG figures, videos, metrics.json, postprocessing.json
+  PostProcessing/
+    PaIRS/                      PNG figures, videos, metrics.json, postprocessing.json of the PaIRS results
+    TracTrac/                   the same for the TracTrac results
 ```
 
 Exported files are named `[project]_[task]_[element]_[number].[format]`; the project is the folder name unless you set
@@ -166,4 +168,4 @@ one in **File > Project name...**. Projects of the previous names of the tool (`
 | "SPICY is not installed" | `pip install "velocihub[regression]"` |
 | Videos are GIF, not MP4 | `pip install "velocihub[video]"` (or put ffmpeg on the PATH) |
 | Not enough memory for the POD | Images are processed through temporary files automatically (Settings > Temporary files, Max memory usage...) |
-| Colour images | Displayed as the mean of their channels (the PIV reads the same intensity) |
+| Colour images | Read in one channel by every step: their brightness max(R, G, B) (HSV value) |

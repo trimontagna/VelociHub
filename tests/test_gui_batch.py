@@ -1,8 +1,9 @@
 """The windows Batch (gui/batch_dialog.py) of the three steps: the settings of a node in the side panel of the page
 (the settings that differ in bold, each with its ↺; a filter of the pre-processing on its own; another PIV software),
-the buttons resetting to the open project or to the stitch reference (greyed when they would change nothing), the
-quantities exported of the post-processing (Check all, the open project, greyed per node), the jobs and the results
-of a previous export overwritten."""
+the projects whose settings differ from those of the open project in bold with their ↺, the stitchings (A.1, A.2;
+the settings of the stitch reference from the menu of a project), the quantities exported of the post-processing
+(Check all, compared with the open project, greyed per node), the jobs and the results of a previous export
+overwritten."""
 
 import os
 
@@ -79,6 +80,11 @@ def row_button(form, label):
     return None
 
 
+def differs(d, iid):
+    """A node of the tree in bold with its ↺: settings that differ from those of the open project."""
+    return "differs" in d.tree.item(iid, "tags") and d.tree.set(iid, "reset") == "↺"
+
+
 def bold(form, label):
     widget = form.labels[label][0]
     return ("bold" in str(widget.cget("font")) if widget.winfo_class() in ("TLabel", "Checkbutton")
@@ -93,13 +99,17 @@ def test_postprocessing(campaign):
     form, settings_of, b = d.form, d.settings_of, campaign.projects["b"]
     assert isinstance(form, BatchPostForm)
     select(d, campaign.node("b"))
-    assert d.reset_button.instate(["disabled"]) and d.reset_all_button.instate(["disabled"])
+    assert not differs(d, campaign.node("b")) and not differs(d, campaign.folder)
+    assert "settings" not in d.tree["columns"] and d.node_tab.cget("text") == "Settings: b"
     assert (form.panel.pod_slider.lo, form.panel.pod_slider.hi) == (1, 3)
     form.panel.vars["outlier_k"].set("3")
     form.commit()
     assert settings_of(b)["settings"]["outlier_k"] == 3.0
     assert settings_of(campaign.projects["c"])["settings"].get("outlier_k", 4.0) == 4.0
-    assert d.reset_button.instate(["!disabled"]) and d.reset_all_button.instate(["!disabled"])
+    assert differs(d, campaign.node("b")) and differs(d, campaign.folder) and not differs(d, campaign.node("c"))
+    # The name in bold only (Unicode bold letters: the font of a row is that of all its columns), the columns plain
+    assert d.tree.item(campaign.node("b"), "text") == batch_dialog.bold_text("b") != "b"
+    assert d.tree.item(campaign.node("c"), "text") == "c" and d.names[campaign.node("b")] == "b"
     form.panel.vars["outlier_k"].set("abc")
     form.commit()
     assert settings_of(b)["settings"]["outlier_k"] == 3.0 and form.panel.vars["outlier_k"].get() == "3" and d.node_note["text"]
@@ -109,44 +119,62 @@ def test_postprocessing(campaign):
     row_button(form, ("settings", "outlier_k")).invoke()
     d.update()
     assert len({settings_of(p)["settings"].get("outlier_k", 4.0) for p in campaign.projects.values()}) == 1
-    assert d.reset_all_button.instate(["disabled"])
+    assert not differs(d, campaign.folder)
 
 
 def test_stitch_reference_and_quantities(campaign):
-    """The stitch reference (a → b): all its settings for b (its camera kept), or its quantities only; the quantities
-    box: Check all, Uncheck all, the open project (greyed when the same), no reset to the default."""
+    """The stitching a → b: A.1 and A.2 in its column; from the menu of b, all the settings of A.1 (its quantities
+    exported too, its camera kept); the quantities box: Check all, Uncheck all, compared with the quantities of the
+    open project (bold, ↺), no reset button."""
     d = campaign.batch("post")
     form, settings_of, a, b = d.form, d.settings_of, campaign.projects["a"], campaign.projects["b"]
     q = d.panels[0][1]
-    assert not q.reset_button.winfo_manager()
+    assert not hasattr(q, "reset_button") and not hasattr(q, "same_button")
     d.step.options.chains = [[(a.root, "a"), (a.root, "b")]]
+    d.check_all(True)
     d.refresh()
+    assert d.tree.set(campaign.node("a"), "extra") == "A.1", d.step.options.tip(d, campaign.node("a")) and d.tree.set(campaign.node("b"), "extra") == "A.2"
+    assert "A.2, stitched to A.1" in d.step.options.tip(d, campaign.node("b"))
+
+    def take():
+        items = d.step.options.context_items(d, campaign.node("b"))
+        assert [label for label, _ in items] == ["Take settings of A.1", "Align Group A"]
+        return items[0][1]
     select(d, campaign.node("b"))
-    assert d.stitch_button.instate(["disabled"]) and q.same_button.instate(["disabled"])  # Already the same
+    assert take() is None  # Already the same
     form.panel.vars["skew_zero"].set("33")
     form.commit()
     form.panel.camera["x_offset"].set("60")
     form.commit()
-    assert d.stitch_button.instate(["!disabled"])
-    d.stitch_button.invoke()
-    d.update()
-    assert settings_of(b)["settings"] == settings_of(a)["settings"]
-    assert settings_of(b)["camera"]["x_offset_mm"] == 60.0
     q.check_buttons[1].invoke()
     d.update()
     assert export_spec(settings_of(b)["export"])["choice"]["figures"] == []
-    assert q.same_button.instate(["!disabled"]) and q.stitch_button.instate(["!disabled"])
-    q.stitch_button.invoke()
+    take()()
     d.update()
+    assert settings_of(b)["settings"] == settings_of(a)["settings"]
+    assert settings_of(b)["camera"]["x_offset_mm"] == 60.0
     assert export_spec(settings_of(b)["export"]) == export_spec(settings_of(a)["export"])
+    # Stitched for each results set that both have and export (PaIRS), not without one
+    units = d.step.options.job(d.chosen())["units"]
+    assert [u["stitching"]["pipeline"] for u in units if "stitching" in u] == ["PaIRS"]
+    assert d.apply_to([b], lambda settings: settings.update(results=["TracTrac"]))
+    d.refresh()
+    assert d.tree.set(campaign.node("b"), "extra") == "A.2 ✗" and "results set" in d.step.options.tip(d, campaign.node("b"))
+    assert d.apply_to([b], lambda settings: settings.update(results=["PaIRS", "TracTrac"]))
+    d.refresh()
+    # A parameter of a quantity of c that differs from the open project: bold with its ↺, which gives it back
     select(d, campaign.node("c"))
-    assert d.stitch_button.instate(["disabled"]) and q.stitch_button.instate(["disabled"])
-    q.check_buttons[1].invoke()
+    q.tree.selection_set("velocity")
+    q.tree.focus("velocity")
+    q.select()
+    q.contour.set("2")
     d.update()
-    q.same_button.invoke()
+    assert export_spec(settings_of(campaign.projects["c"])["export"])["params"]["contours"]["velocity"] == 2.0
+    assert "differs" in q.tree.item("velocity", "tags") and differs(d, campaign.node("c"))
+    q.reset_quantity("velocity")
     d.update()
-    assert q.same_button.instate(["disabled"])
-    assert export_spec(settings_of(campaign.projects["c"])["export"]) == export_spec(settings_of(a)["export"])
+    assert "velocity" not in export_spec(settings_of(campaign.projects["c"])["export"])["params"]["contours"]
+    assert not differs(d, campaign.node("c"))
 
 
 def test_preprocessing(campaign):
@@ -156,7 +184,7 @@ def test_preprocessing(campaign):
     form, settings_of, b = d.form, d.settings_of, campaign.projects["b"]
     assert isinstance(form, BatchPreForm) and not hasattr(form.panel, "new_mask_button")
     select(d, campaign.node("b"))
-    assert d.reset_button.instate(["disabled"])
+    assert not differs(d, campaign.node("b"))
     panel = form.panel
     before = "minmax" in (settings_of(b)["contrast"].get("filters") or [])
     panel.checks["minmax"].set(not before)
@@ -169,7 +197,7 @@ def test_preprocessing(campaign):
     panel.page.set_modes_removed()
     assert settings_of(b)["contrast"]["cap_n"] == 7.0
     assert int(settings_of(b)["background_removal"]["modes_removed"]) == 5
-    assert d.reset_button.instate(["!disabled"])
+    assert differs(d, campaign.node("b"))
     select(d, campaign.folder)
     filters = ("contrast", "filters")
     assert bold(form, (filters, "minmax")) and not bold(form, (filters, "capping"))
@@ -179,9 +207,9 @@ def test_preprocessing(campaign):
     assert len({"minmax" in (settings_of(p)["contrast"].get("filters") or []) for p in campaign.projects.values()}) == 1
     assert settings_of(b)["contrast"]["cap_n"] == 7.0  # The other setting kept
     select(d, campaign.node("b"))
-    d.reset_button.invoke()
+    d.reset_node(campaign.node("b"))  # Its ↺
     d.update()
-    assert d.reset_button.instate(["disabled"])
+    assert not differs(d, campaign.node("b"))
 
 
 def test_piv(campaign):
@@ -191,7 +219,7 @@ def test_piv(campaign):
     form, settings_of, b = d.form, d.settings_of, campaign.projects["b"]
     assert isinstance(form, BatchPIVForm)
     select(d, campaign.node("b"))
-    assert d.reset_button.instate(["disabled"])
+    assert not differs(d, campaign.node("b"))
     engine = settings_of(b)["engine"]
     p = next(p for p in piv.get_engine(engine).parameters if p.kind in ("int", "float"))
     form.panel.engine_vars[p.key].set("3" if form.panel.engine_vars[p.key].get() != "3" else "4")
@@ -205,9 +233,9 @@ def test_piv(campaign):
     form.panel.regression.set("spicy")
     form.panel.regression_changed()
     assert settings_of(b)["regression"]["method"] == "spicy"
-    d.reset_button.invoke()
+    d.reset_node(campaign.node("b"))
     d.update()
-    assert settings_of(b)["engine"] == engine and d.reset_button.instate(["disabled"])
+    assert settings_of(b)["engine"] == engine and not differs(d, campaign.node("b"))
 
 
 def test_quantities_greyed_per_node(campaign):
@@ -235,7 +263,7 @@ def test_jobs_and_overwrite(campaign):
         d.check_all(True)
         d.ok()
         assert d.result and len(d.result["projects"]) == 3 and step in d.result["projects"][0]["settings"]
-    folder = os.path.join(campaign.projects["b"].folder, "PostProcessing")
+    folder = os.path.join(campaign.projects["b"].folder, "PostProcessing", "PaIRS")
     os.makedirs(folder)
     open(os.path.join(folder, "b_PostProcessing_Old.png"), "w").close()
     d = campaign.batch("post")

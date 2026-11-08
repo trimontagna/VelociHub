@@ -75,28 +75,43 @@ class LagrangianAnalysis:
                 return {k: z[k] for k in z.files if k != "tractrac"}
         return self.cached("ptv_tracks", path, compute)
 
-    def track_units(self):
-        """Scale (mm per px), offsets (mm) and time between frames (s) of the tracks, as those of the vector fields;
-        None for vector fields in pixels."""
+    def track_camera(self):
+        """The camera of the vector fields (piv.Camera), which converts the tracks as it converted them; None for
+        vector fields in pixels."""
         f = self.fields
-        if f.settings.get("units") == "px" or not f.scale or not f.dt:
+        camera = f.settings.get("camera")
+        if f.settings.get("units") == "px" or not camera or not f.dt:
             return None
-        camera = f.settings.get("camera") or {}
-        return f.scale, camera.get("x_offset_mm", 0.0), camera.get("y_offset_mm", 0.0), f.dt
+        from .piv import Camera
+
+        return Camera.from_record(camera)
+
+    def track_units(self):
+        """Pixel pitches (mm per px, horizontal and vertical) and time between frames (s) of the tracks, as those of
+        the vector fields; None for vector fields in pixels."""
+        f = self.fields
+        if self.track_camera() is None or not f.scale:
+            return None
+        return f.scale, f.scale_y or f.scale, f.dt
 
     def track_positions(self, x_px, y_px):
-        """Positions of particles in the images as those of the vector fields (x, y: mm, y upwards from the middle
-        of the images; px in pixels)."""
-        scale, x0, y0, _ = self.track_units() or (1.0, 0.0, 0.0, 1.0)
-        height = self.fields.settings["image_px"][1]
-        return x_px * scale + x0, (height / 2 - y_px) * scale + y0
+        """Positions of particles in the images (px from their top-left corner) as those of the vector fields (mm,
+        from the origin of the axes of the camera, y upwards; px from the bottom-left corner of the images in the
+        sensor space)."""
+        width, height = self.fields.settings["image_px"]
+        camera = self.track_camera()
+        if camera is None:
+            return np.asarray(x_px, np.float64), height - np.asarray(y_px, np.float64)
+        return camera.positions(x_px, y_px, width, height)
 
     def track_velocity(self, u_px, v_px, power=1):
         """Velocities (power 1, px per frame) or accelerations (power 2, px per frame²) of particles, as those of the
         vector fields (m/s, m/s²; px per pair in pixels), y upwards."""
         units = self.track_units()
-        factor = 1.0 if units is None else units[0] / 1000.0 / units[3] ** power
-        return u_px * factor, -v_px * factor
+        if units is None:
+            return u_px * 1.0, -v_px * 1.0
+        sx, sy, dt = units
+        return u_px * (sx / 1000.0 / dt ** power), -v_px * (sy / 1000.0 / dt ** power)
 
     def cells(self, x, y):
         """Cell of the grid of the vector fields (row, column; -1 outside) of positions x, y (those of the fields)."""
@@ -176,7 +191,7 @@ class LagrangianAnalysis:
             else:
                 from .piv import Camera
 
-                other = load_vectors(path, camera=Camera(**camera))
+                other = load_vectors(path, camera=Camera.from_record(camera))
             return type(self)(other, self.settings)
         post = self.cached("ptv_piv", (path, os.path.getmtime(path)), compute)
         post.settings = self.settings

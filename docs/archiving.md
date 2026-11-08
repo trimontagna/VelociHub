@@ -98,10 +98,10 @@ subfolder per measurement setup with its PIV results (`[setup]/PIV/vectors.npz`)
 | Setting | Default | Meaning |
 |---|---|---|
 | `ARCHIVE` | current folder | The archive folder. |
-| `FOV_WIDTH_MM` | `{"FOV_1": 196.1, "FOV_2": 196.5, "FOV_3": 196.3}` | Width of each field of view (mm). **Set these for your setup.** |
+| `FOV_WIDTH_MM` | `{"FOV_1": 196.1, "FOV_2": 196.5, "FOV_3": 196.3}` (from `velocihub/jet/presets.py`) | Width of each field of view (mm). **Set these for your setup.** The axes are centred on the jet (`JET_Y_SHIFT` = 0.5: y = 0 at the middle of the height). |
 | `FOV_X_OFFSET_MM` / `FOV_Y_OFFSET_MM` | 0, 120, 240 / `{}` | Horizontal offset of each field of view's left edge, vertical offset of its middle (mm). |
-| `FRAME_RATE_HZ` | 150 | Frame rate of the camera. |
-| `SETTINGS` | a `PostSettings` | The common recipe (outlier_k, hold_maps, reference quantities, core detection, rolling...). |
+| `FRAME_RATE_HZ` | 150 (`PRESET_FRAME_RATE`) | Frame rate of the camera. |
+| `SETTINGS` | a `PostSettings` | The common recipe (outlier_k, hold_maps, reference quantities, the jet theory add-on on, core detection, rolling...). |
 | `REFERENCE_FOV` | `"FOV_1"` | Field of view giving the reference velocity of each setup. |
 | `MATCH_VELOCITY`, `MATCH_JET`, `MATCH_EDGE` | True, 0.5, 2 | Velocity matching in the overlaps: on/off, jet cells used (≥ this fraction of the overlap maximum), edge columns left out. |
 | `INDEX` | −1 | Map of the instantaneous figures exported (negative from the end). |

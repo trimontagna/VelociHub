@@ -6,8 +6,9 @@ VelociHub takes a set of PIV images all the way to velocity fields and their fig
 |---|---|
 | **1. Pre-processing** | Masks, contrast enhancement and POD-based background removal of the images (Mendez et al. 2017). |
 | **2. Processing (PIV / PTV)** | Cross-correlation PIV with PaIRS-UniNa, or particle tracking (PTV) with TracTrac; optional regression of the fields with SPICY. |
-| **3. Post-processing** | Statistics, vorticity, turbulence, moments, gradients, jet potential core, displacements, quality (valid vectors, peak ratio, peak locking, convergence), PTV tracks and accelerations, images and POD modes. Figures, comparisons, videos and exports. |
+| **3. Post-processing** | Statistics, vorticity, turbulence, moments, gradients, displacements, quality (valid vectors, peak ratio, peak locking, convergence), PTV tracks and accelerations, images and POD modes. Figures, comparisons, videos and exports. |
 | **Batch processing** | Any step on many projects of a workspace, each with its own settings (window Batch, command line or API). |
+| **Jet theory (add-on)** | The potential core of a jet (velocity level or peak skewness), its profiles and centreline, and the presets of the jet measurements (`velocihub/jet`, `PostSettings(jet_theory=True)`). |
 | **Archiving (add-on)** | Projects packed into ZIP/TAR archives, and the post-processing + stitching of several fields of view of an archive. |
 
 Every setting and result is kept in a project file (`VelociHub_project.json`) next to the images, so a folder opened
@@ -19,7 +20,8 @@ import velocihub as vh
 
 p = vh.Project("D:/Jet/Run_30")
 p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
-p.set_postprocessing(camera=vh.Camera(196.1, frame_rate_hz=150), outlier_k=4, figures=["mean_velocity", "u_rms"])
+p.set_postprocessing(camera=vh.Camera(196.1, frame_rate_hz=150, y_shift=0.5), outlier_k=4,
+                     figures=["mean_velocity", "u_rms"])
 p.save()          # opens in the interface with these settings
 p.run()           # pre-processing, PIV, post-processing
 ```

@@ -2,9 +2,8 @@
 of a stitching, stitching.py): their Horiz. and Vert. offsets set on a background common to them, then written in
 the node settings of their projects (Apply; nothing is changed before).
 
-The fields of view are drawn at their offsets, at the scale of their camera settings (the width of the field of view
-over that of the images; y upwards from the middle of the height of the images, as the vector fields), over one of
-the backgrounds:
+The fields of view are drawn at their offsets, at the scale of their camera settings (the pixel pitches; y upwards
+from the origin of the axes of the camera, as the vector fields), over one of the backgrounds:
 - Mean raw image: the median of some raw images of the project. The particles move and fade out; the scene that
   doesn't move (nozzle, walls, edges, reflections) stays: the same objects in all the fields of view, even measured
   in separate runs;
@@ -179,7 +178,9 @@ class AlignWindow(tk.Toplevel):
         self.sources = []
         try:
             for p, camera in zip(projects, cameras):
-                k = (background, p.folder, camera.get("fov_width_mm"))
+                # The geometry of the camera (its offsets are those moved here)
+                k = (background, p.folder, *(camera.get(key) for key in ("fov_width_mm", "fov_height_mm", "x_shift",
+                                                                         "y_shift", "frame_rate_hz")))
                 if k not in self.cache:
                     self.status["text"] = f"Reading {p.path}..."
                     self.update_idletasks()

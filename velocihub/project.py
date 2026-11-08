@@ -80,9 +80,14 @@ def run_time(settings):
     return None
 
 
+def valid_text(valid_percent, before=", "):
+    """The valid vectors (%) of a PIV in a sentence (after before); nothing for a PTV (valid_percent None)."""
+    return "" if valid_percent is None else f"{before}{valid_percent:.1f} % valid vectors"
+
+
 def piv_results(file, settings, valid_percent=None):
     """The results of a PIV as kept in the project (section piv, results): the file of the vector fields (as
-    saved in the project), its date, number of pairs, valid vectors (%) and run time, from its settings."""
+    saved in the project), its date, number of pairs, valid vectors (%; a PIV only) and run time, from its settings."""
     seconds = run_time(settings)
     results = {"file": file, "date": settings.get("date"), "n_pairs": settings.get("n_pairs")}
     if valid_percent is not None:
@@ -171,8 +176,8 @@ def summary(data):
                      f"{pre.get('export_folder')} ({export.get('steps') or 'no step'})")
     results = data.get("piv", {}).get("results")
     if results:
-        lines.append(f"PIV/PTV: {results.get('n_pairs')} pairs on {results.get('date')}, "
-                     f"{results.get('valid_percent')} % valid vectors"
+        lines.append(f"PIV/PTV: {results.get('n_pairs')} pairs on {results.get('date')}"
+                     + valid_text(results.get("valid_percent"))
                      + (f", run time {results['run_time']}" if results.get("run_time") else "")
                      + f" ({results.get('file')})")
     post = data.get("postprocessing", {}).get("export")

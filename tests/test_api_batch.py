@@ -5,6 +5,8 @@ batch_run.py): the settings saved in the project file, the pre-processing up to 
 import os
 import zipfile
 
+import pytest
+
 import synthetic as s
 import velocihub as vh
 from velocihub import batch
@@ -32,7 +34,7 @@ def test_postprocessing_exported_and_overwritten(copy):
     p = vh.Project(folder)
     p.set_postprocessing(camera=s.CAMERA, figures=["mean_velocity", "u_rms"])
     status, _ = p.postprocess()
-    out = os.path.join(folder, "PostProcessing")
+    out = os.path.join(folder, "PostProcessing", "PaIRS")  # The subfolder of the pipeline
     assert status == "done" and any(n.endswith("URms.png") for n in os.listdir(out))
     p.set_postprocessing(figures=["mean_velocity"])
     p.postprocess()
@@ -43,13 +45,26 @@ def test_postprocessing_exported_and_overwritten(copy):
 
 
 def test_results_chosen(copy):
-    """A project with PIV and PTV results: those chosen post-processed, in their own export folder."""
+    """A project with the results of two pipelines: those chosen post-processed, in the subfolder of their pipeline;
+    the methods of the previous versions (PTV) are their pipelines."""
     folder = copy("both")
     p = vh.Project(folder)
-    p.set_postprocessing(results="PTV", camera=s.CAMERA, figures=["ptv_yield"])
+    assert list(p.results_folders()) == ["PaIRS", "TracTrac"]
+    p.set_postprocessing(results="TracTrac", camera=s.CAMERA, figures=["ptv_yield"])
     assert p.postprocess()[0] == "done"
-    assert os.path.isfile(os.path.join(folder, "PostProcessing_PTV", "metrics.json"))
-    assert not os.path.isdir(os.path.join(folder, "PostProcessing"))
+    assert os.path.isfile(os.path.join(folder, "PostProcessing", "TracTrac", "metrics.json"))
+    assert not os.path.isdir(os.path.join(folder, "PostProcessing", "PaIRS"))
+    p.set_postprocessing(results="PTV")
+    assert p.postprocessing["results"] == ["TracTrac"] and p.vector_fields().particles is not None
+    with pytest.raises(ValueError):
+        p.set_postprocessing(results="Nothing")
+    # Both results sets: the same export for each, in the subfolder of its pipeline
+    p.set_postprocessing(results=["TracTrac", "PaIRS"], figures=["mean_velocity"])
+    assert p.postprocessing["results"] == ["PaIRS", "TracTrac"]
+    status, message = p.postprocess()
+    assert status == "done" and "PaIRS" in message and "TracTrac" in message
+    for label in ("PaIRS", "TracTrac"):
+        assert any(n.endswith("MeanU.png") for n in os.listdir(os.path.join(folder, "PostProcessing", label)))
 
 
 def test_preprocessing_up_to_date(copy):

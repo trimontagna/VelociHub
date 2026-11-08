@@ -9,7 +9,7 @@ its node of the workspace (or of the interface), as the step needs them:
 - preprocessing: {"preprocessing": section of the project} (batch.preprocess_folder);
 - piv: {"preprocessing": section, "piv": {"engine", "options", "settings", "output_folder"}} (batch.process_folder);
 - postprocessing: {"postprocessing": {"settings": PostSettings as a dictionary, "space", "camera":
-  {"fov_width_mm", "x_offset_mm", "y_offset_mm", "frame_rate_hz"} or None, "export_folder", "export": export
+  settings.CAMERA_KEYS (fov_width_mm, fov_height_mm, offsets, shifts, frame_rate_hz) or None, "export_folder", "export": export
   specification}}; with stitchings, options: "globals" (of velocihub/archiving/post_archive.py) and "units" (gui/stitching.py:
   the projects outside the stitchings one by one, then each chain of projects stitched: run_stitching);
 - archive: {"archive": {"categories": [...]}} (velocihub/archiving/archive.py; "outside": the files of the root of the project
@@ -31,8 +31,10 @@ import traceback
 
 from . import batch, piv
 from .fields import count_maps, load_vectors
+from .pipelines import chosen_results, pipeline_of, results_folders
 from .postprocessing import PostProcessing, PostSettings, export_folder_name, previous_results, remove_results
 from .project import format_duration, read_project
+from .settings import camera_of, camera_record
 
 def emit(*parts):
     print("@@" + " ".join(str(p) for p in parts), flush=True)
@@ -118,8 +120,23 @@ def inside(folder, path, default):
 
 def post_export_folder(folder, s, maps):
     """The export folder of the post-processing of a project (s: its settings; maps: the folder of its vector
-    fields): the one of its settings, else PostProcessing, or PostProcessing_PTV for the results of a PTV."""
-    return inside(folder, export_folder_name(s.get("export_folder"), maps), export_folder_name(None, maps))
+    fields): the one of its settings (with several results sets: the subfolder of their pipeline in it), else the
+    subfolder of their pipeline in PostProcessing."""
+    out = inside(folder, export_folder_name(s.get("export_folder"), maps), export_folder_name(None, maps))
+    label = pipeline_of(maps)
+    if len(s.get("maps_folders") or {}) > 1 and label and os.path.basename(os.path.normpath(out)) != label:
+        out = os.path.join(out, label)
+    return out
+
+
+def post_datasets(folder, s, pipelines=None):
+    """The vector fields of the results sets of a project post-processed (s: its settings; pipelines: only those):
+    {label: folder} (maps_folders, else the maps folder of post_inputs)."""
+    datasets = s.get("maps_folders")
+    if not datasets:
+        maps = post_inputs(folder, s)[0]
+        datasets = {pipeline_of(maps) or "": maps}
+    return {label: maps for label, maps in datasets.items() if pipelines is None or label in pipelines}
 
 
 def project_name(folder):
@@ -133,21 +150,14 @@ def project_name(folder):
 
 def post_inputs(folder, s):
     """The vector fields, the camera and the recipe of the post-processing of a project (s: its settings): those of
-    its folder of the PIV by default, or of the PTV if it has none."""
-    maps = s.get("maps_folder") or os.path.join(folder, piv.PIV_FOLDER)
-    ptv = os.path.join(folder, piv.PTV_FOLDER)
-    if (not s.get("maps_folder") and not os.path.isfile(os.path.join(maps, piv.VECTORS_FILE))
-            and os.path.isfile(os.path.join(ptv, piv.VECTORS_FILE))):
-        maps = ptv
-    if not os.path.isfile(os.path.join(maps, piv.VECTORS_FILE)) and os.path.isfile(os.path.join(folder,
-                                                                                                piv.VECTORS_FILE)):
-        maps = folder
+    its maps folder, else of the pipeline chosen (results; the default one: those of the first pipeline found if it
+    has none)."""
+    maps = (s.get("maps_folder") or next(iter((s.get("maps_folders") or {}).values()), None)
+            or chosen_results(results_folders(folder), s.get("results")) or os.path.join(folder, piv.PIV_FOLDER))
     names = set(PostSettings.__dataclass_fields__)
     settings = PostSettings(**{k: v for k, v in (s.get("settings") or {}).items() if k in names})
     camera = s.get("camera") if s.get("space", "physical") == "physical" else None
-    camera = piv.Camera(fov_width_mm=float(camera["fov_width_mm"]), x_offset_mm=float(camera.get("x_offset_mm") or 0),
-                        frame_rate_hz=float(camera["frame_rate_hz"]),
-                        y_offset_mm=float(camera.get("y_offset_mm") or 0)) if camera else None
+    camera = camera_of(camera) if camera else None
     return maps, camera, settings
 
 
@@ -169,26 +179,34 @@ def run_piv(project, job, progress=Progress):
     return result.status, result.describe()
 
 
-def run_postprocessing(project, job, progress=Progress):
+def run_postprocessing(project, job, progress=Progress, pipelines=None):
+    """The post-processing of a project: the same export for each of its results sets (pipelines: only those; the
+    others are those of its stitchings)."""
     from .settings import export_choice, export_index, export_options
 
     folder = project["folder"]
     s = project["settings"]["postprocessing"]
-    maps, camera, settings = post_inputs(folder, s)
-    if s.get("space", "physical") == "physical" and camera is None:
-        return "failed", "physical space without camera settings (field of view width, frame rate)"
-    t0 = time.time()
-    fields = load_vectors(os.path.join(maps, piv.VECTORS_FILE), camera=camera, pixels=camera is None)
-    post = PostProcessing(fields, settings)
-    n = fields.n
-    # The map of the instantaneous figures: the one chosen in the quantities, else the last one
-    index = export_index(export_choice((s.get("export") or {}).get("choice")))
-    if job["options"].get("overwrite"):  # The results of a previous export replaced (asked in the window Batch)
-        remove_results(previous_results(post_export_folder(folder, s, maps), project_name(folder)))
-    files = post.export(post_export_folder(folder, s, maps),
-                        index if -n <= index < n else 0, name=project_name(folder),
-                        progress=progress("Export") if progress else None, **export_options(s.get("export") or {}, n))
-    return "done", f"{len(files)} files exported in {format_duration(time.time() - t0)}"
+    datasets = post_datasets(folder, s, pipelines)
+    if not datasets:
+        return "failed", "no results of the results sets chosen"
+    t0, messages = time.time(), []
+    for label, maps in datasets.items():
+        _, camera, settings = post_inputs(folder, {**s, "maps_folder": maps})
+        if s.get("space", "physical") == "physical" and camera is None:
+            return "failed", "physical space without camera settings (field of view width, frame rate)"
+        fields = load_vectors(os.path.join(maps, piv.VECTORS_FILE), camera=camera, pixels=camera is None)
+        post = PostProcessing(fields, settings)
+        n = fields.n
+        # The map of the instantaneous figures: the one chosen in the quantities, else the last one
+        index = export_index(export_choice((s.get("export") or {}).get("choice")))
+        export_folder = post_export_folder(folder, s, maps)
+        if job["options"].get("overwrite"):  # The results of a previous export replaced (asked in the window Batch)
+            remove_results(previous_results(export_folder, project_name(folder)))
+        files = post.export(export_folder, index if -n <= index < n else 0, name=project_name(folder),
+                            progress=progress(f"Export {label}".strip()) if progress else None,
+                            **export_options(s.get("export") or {}, n))
+        messages.append(f"{label + ': ' if label else ''}{len(files)} files")
+    return "done", f"{', '.join(messages)} exported in {format_duration(time.time() - t0)}"
 
 
 # ------------------------------------------------------------------ steps of the whole job
@@ -262,8 +280,9 @@ def bare_unit(ap, project):
 
 def run_stitching(job, stitching):
     """A chain of projects post-processed and stitched (archiving/post_archive.main; stitching: {"setup", "members":
-    [{"folder", "root", "fov"}], the reference first}): the quantities of the reference exported for all of them, the
-    stitched figures in the folder Stitched of its PostProcessing folder."""
+    [{"folder", "root", "fov"}], the reference first, "pipeline": the results set stitched, None: the maps folder of
+    each}): the quantities of the reference exported for all of them, the stitched figures in the folder Stitched of
+    its export folder."""
     from .settings import export_choice, export_index, export_options
 
     from .archiving import post_archive as r
@@ -281,6 +300,11 @@ def run_stitching(job, stitching):
     for member, project in zip(members, projects):
         folder = os.path.normpath(project["folder"])
         s = project["settings"]["postprocessing"]
+        label = stitching.get("pipeline")
+        if label:
+            if label not in (s.get("maps_folders") or {}):
+                return "failed", f"{member['fov']}: no {label} results"
+            s = {**s, "maps_folder": s["maps_folders"][label]}
         maps, camera, settings = post_inputs(folder, s)
         if camera is None:
             return "failed", f"{member['fov']}: no camera settings (the stitching needs the physical space)"
@@ -290,8 +314,7 @@ def run_stitching(job, stitching):
                       maps_folder=maps, name=project_name(folder))
         items.append({"folder": folder, "fov": member["fov"], "setup": stitching["setup"], "settings": settings,
                       "export": export, "index": export_index(export_choice(spec.get("choice"))),
-                      "camera": {"fov_width_mm": camera.fov_width_mm, "x_offset_mm": camera.x_offset_mm,
-                                 "y_offset_mm": camera.y_offset_mm, "frame_rate_hz": camera.frame_rate_hz}})
+                      "camera": camera_record(camera)})
     stitched = os.path.join(items[0]["export"]["export_folder"], "Stitched")
     items[0]["stitched_folder"] = stitched
     if job["options"].get("overwrite"):  # The results of a previous export replaced (asked in the window Batch)
@@ -344,7 +367,11 @@ def main(path):
                 status, message = run_stitching(job, unit["stitching"])
             else:
                 project = projects[os.path.normcase(os.path.normpath(unit["folders"][0]))]
-                status, message = PROJECT_STEPS[step](project, job)
+                if step == "postprocessing" and unit.get("pipelines") is not None:
+                    # The results sets of a project that aren't stitched (those stitched: in their stitchings)
+                    status, message = run_postprocessing(project, job, pipelines=unit["pipelines"])
+                else:
+                    status, message = PROJECT_STEPS[step](project, job)
         except KeyboardInterrupt:
             emit("result", "stopped", "stopped by the user: the next projects aren't run")
             break

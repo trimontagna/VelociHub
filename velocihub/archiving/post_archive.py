@@ -62,30 +62,33 @@ from matplotlib.image import AxesImage
 from matplotlib.quiver import Quiver
 
 import velocihub as vh
+from velocihub.jet.presets import FOV_PRESETS, JET_X_SHIFT, JET_Y_SHIFT, NOZZLE_DIAMETER_MM, PRESET_FRAME_RATE
 from velocihub.postprocessing import FIGURE_FILES, INSTANTANEOUS, MAP_FIGURES
 from velocihub.fields import EXPORT_DPI, TFLOW, UREF, Video, map_indices, scale_frames, sig2
 from velocihub.project import export_name, format_duration
 
 # The archive: a folder per field of view (FOV_1, FOV_2...), a folder per measurement setup in each
 ARCHIVE = os.getcwd()
-# The fields of view: width (mm), horizontal offset of their left edge (mm, along the jet) and vertical offset of
-# the middle of their height (mm; none: 0)
-FOV_WIDTH_MM = {"FOV_1": 196.1, "FOV_2": 196.5, "FOV_3": 196.3}
-FOV_X_OFFSET_MM = {"FOV_1": 0.0, "FOV_2": 120.0, "FOV_3": 240.0}
+# The fields of view (those of the jet measurements: velocihub/jet/presets.py): width (mm), horizontal offset of their
+# left edge (mm, along the jet) and vertical offset of the middle of their height (mm; none: 0), the axes centred on
+# the jet (y = 0 at the middle of the height of the images: JET_Y_SHIFT)
+FOV_WIDTH_MM = {f"FOV_{k}": v["width_mm"] for k, v in FOV_PRESETS.items()}
+FOV_X_OFFSET_MM = {f"FOV_{k}": v["x_offset_mm"] for k, v in FOV_PRESETS.items()}
 FOV_Y_OFFSET_MM = {}
 # The order of the fields of view of the measurements given (main(items)): theirs, that of the stitched figures when
 # their horizontal offsets are the same
 FOV_ORDER = {}
 # Common to all the measurements
-FRAME_RATE_HZ = 150.0
+FRAME_RATE_HZ = PRESET_FRAME_RATE
 SETTINGS = vh.PostSettings(
+    jet_theory=True,        # The jet theory add-on (potential core) on
     outlier_k=4.0,          # Statistical outlier filtering: drop a cell beyond this many standard deviations (0: none)
     hold_maps=5,            # Data reconstruction: invalid cells of the instantaneous maps held (# of maps; 0: none)
     use_u_ref=True,        # Reference velocity: the velocities shown over u_ref (False: in m/s)
     u_ref=None,             # ... u_ref (m/s; None: the maximum of the mean u of each field of view)
     use_t_flow=True,        # Flow time: the times in flow times t_flow (False: in s)
     t_flow=None,            # ... t_flow (s; None: L_FoV / u_ref)
-    l_ref=50,             # Reference length (mm; None: the positions in mm), e.g. 50 (nozzle diameter)
+    l_ref=NOZZLE_DIAMETER_MM,  # Reference length (mm; None: the positions in mm), e.g. 50 (nozzle diameter)
     peak_locking_bins=21,   # Peak locking: bins per pixel of its histograms (odd)
     core_mode="level",      # Potential core: detection, "level" (core_level) or "skewness" of the profiles
     core_level=80.0,        # ... mean u >= this % of u_ref
@@ -151,8 +154,9 @@ def measurements(archive):
 
 
 def camera(fov, offsets=FOV_X_OFFSET_MM):
+    """The camera of a field of view of the archive: the axes centred on the jet (JET_X_SHIFT, JET_Y_SHIFT)."""
     return vh.Camera(fov_width_mm=FOV_WIDTH_MM[fov], x_offset_mm=offsets[fov], frame_rate_hz=FRAME_RATE_HZ,
-                      y_offset_mm=FOV_Y_OFFSET_MM.get(fov, 0.0))
+                     y_offset_mm=FOV_Y_OFFSET_MM.get(fov, 0.0), x_shift=JET_X_SHIFT, y_shift=JET_Y_SHIFT)
 
 
 def arrows_of(q):
@@ -556,8 +560,8 @@ def matched_references(folders, offsets, setups, base=lambda folder: SETTINGS,
 
 
 def use_items(items):
-    """The measurements given (items: {"folder", "fov", "setup", "camera": {"fov_width_mm", "x_offset_mm",
-    "frame_rate_hz"}, "settings": PostSettings, "export": options of vh.batch.postprocess_folder}): the widths, the
+    """The measurements given (items: {"folder", "fov", "setup", "camera": a camera of the batch settings
+    (settings.CAMERA_KEYS), "settings": PostSettings, "export": options of vh.batch.postprocess_folder}): the widths, the
     horizontal and the vertical offsets of their fields of view (those of the first measurement of each). Returns
     {fov: {setup: folder}}."""
     global FOV_WIDTH_MM, FOV_X_OFFSET_MM, FOV_Y_OFFSET_MM, FOV_ORDER
@@ -614,11 +618,12 @@ def main(archive=ARCHIVE, setups=None, export_root=None, stitched_folder=STITCHE
 
     def camera_of(folder):
         item = by_folder.get(os.path.normpath(folder))
-        cam = camera(fov_of[folder], offsets)
-        return cam if item is None else vh.Camera(fov_width_mm=FOV_WIDTH_MM[fov_of[folder]],
-                                                    x_offset_mm=offsets[fov_of[folder]],
-                                                    y_offset_mm=FOV_Y_OFFSET_MM.get(fov_of[folder], 0.0),
-                                                    frame_rate_hz=float(item["camera"]["frame_rate_hz"]))
+        if item is None:
+            return camera(fov_of[folder], offsets)
+        # Its own camera (its pixel pitches, axes and frame rate), the offsets of its field of view
+        return vh.settings.camera_of({**item["camera"], "fov_width_mm": FOV_WIDTH_MM[fov_of[folder]],
+                                      "x_offset_mm": offsets[fov_of[folder]],
+                                      "y_offset_mm": FOV_Y_OFFSET_MM.get(fov_of[folder], 0.0)})
     if MATCH_VELOCITY:
         # The setups whose fields of view have the same horizontal offset: their overlaps unknown, not matched
         placed = {setup for setup in common if len({offsets[fov] for fov in fovs_of[setup]}) > 1}

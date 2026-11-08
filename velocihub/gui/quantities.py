@@ -2,23 +2,29 @@
 and Video, clicked to change them), the parameters of the quantity selected as the tiles have them (colour range,
 colour map, isocontour, second quantity compared with a wiper and the position of the wiper) and its own video and
 instantaneous maps (overriding the global settings), and the global settings of the export: the videos and the
-instantaneous maps. The parameters changed from the default are marked ≠, their number in the column Parameters.
-The quantities of the PTV are greyed out (not chosen) when the vector fields aren't those of a PTV, those of the images
-(raw, pre-processed) and of their POD when they aren't found (the POD mode chosen not evaluated).
+instantaneous maps. The quantities whose parameters differ from those of the reference (the default export; in the
+window Batch, that of the project open) are in bold with ↺ in their row, which gives them those of the reference (the
+quantities exported or not, and their videos, aren't parameters); the parameters that differ are marked ≠. The groups
+greyed out are folded (unfolded once they can be exported). The groups are those of the menus of the tiles
+of the page (the images and the POD in Pre-Processing, the jet theory in Add-ons). The quantities of the PTV are
+greyed out (not chosen) when the vector fields aren't those of a PTV, those of the quality of a PIV for those of a PTV,
+those of the images (raw, pre-processed) and of their POD when they aren't found (the POD mode chosen not evaluated),
+those of the jet theory when the add-on is off.
 The panel (QuantitiesEditor) edits an export specification (export_spec): in the window Quantities of the page (Run
 step > Quantities..., QuantitiesDialog), and in the window Batch for the node selected."""
 
 import copy
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 from ..fields import num2str
 from ..imaging import STATIC
+from ..jet import JET_GROUP
 from ..lagrangian import GROUP as PTV_GROUP
-from ..postprocessing import FIGURE_GROUPS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES
+from ..postprocessing import FIGURE_GROUPS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES, MENU_PARENTS, PIV_GROUP
 from .postprocessing_page import FORMAT_LABELS, images_summary, video_summary
 from ..settings import COMPARE_FRACTION, DEFAULT_EXPORT, image_maps, image_settings, read_step_fps, video_settings
-from .widgets import Dialog, RangeSlider
+from .widgets import Dialog, HelpDot, RangeSlider, ScrolledFrame
 from ..settings import COLORMAPS
 from ..settings import export_spec
 
@@ -27,39 +33,43 @@ NONE = "None"
 # The cells of the columns Images and Video: exported, not exported, not possible (a setting rules it out); some of
 # the quantities of a group exported
 CHECKED, UNCHECKED, UNAVAILABLE, PARTIAL = "☑", "☐", "⬚", "▣"
-# The quantities of the PTV (exported for the results of a PTV only) and their group
-PTV_KEYS, PTV_GROUP_ROW = set(PTV_GROUP[1]), "group|" + PTV_GROUP[0]
+# The quantities of the PTV (exported for the results of a PTV only), of the quality of a PIV (for the results of a
+# PIV only), of the jet theory (with the add-on on)
+PTV_KEYS, PIV_KEYS, JET_KEYS = set(PTV_GROUP[1]), set(PIV_GROUP[1]), set(JET_GROUP[1])
 
 
-def quantity_changes(spec, key):
-    """The parameters of a quantity changed from the default export: images (not exported), video, colour range,
-    colour map, isocontour, second quantity, wiper position, its own video settings and instantaneous maps."""
-    choice, params = spec["choice"], spec["params"]
-    out = set()
-    if not (choice["figures"] is None or key in choice["figures"]):
-        out.add("images")
-    if key in choice["videos"]:
-        out.add("video")
-    out |= {name for name in ("clims", "cmaps", "contours", "compares") if key in params[name]}
-    if abs(params["wipers"].get(key, COMPARE_FRACTION) - COMPARE_FRACTION) > 1e-9:
+# The parameters of a quantity in an export specification: its own entry in these sections
+QUANTITY_PARAMS = ("clims", "cmaps", "contours", "compares")
+
+
+def quantity_changes(spec, key, reference=None):
+    """The parameters of a quantity that differ from those of a reference export specification (None: the default
+    export): colour range, colour map, isocontour, second quantity, wiper position, its own video settings and
+    instantaneous maps (not whether its images and its video are exported: a choice, not a parameter)."""
+    reference = reference or export_spec(None)
+    params, ref = spec["params"], reference["params"]
+    out = {name for name in QUANTITY_PARAMS if params[name].get(key) != ref[name].get(key)}
+    if abs(params["wipers"].get(key, COMPARE_FRACTION) - ref["wipers"].get(key, COMPARE_FRACTION)) > 1e-9:
         out.add("wipers")
-    if key in spec["videos"]:
+    if spec["videos"].get(key) != reference["videos"].get(key):
         out.add("own_video")
-    if key in spec.get("images", {}):
+    if spec.get("images", {}).get(key) != reference.get("images", {}).get(key):
         out.add("own_images")
     return out
 
 
-def global_changes(spec):
-    """The global settings of the export changed from the default: videos (every N maps, frames per second, the
-    first and the last maps, the format), instantaneous maps (the maps chosen, every N maps)."""
+def global_changes(spec, reference=None):
+    """The global settings of the export that differ from those of a reference (None: the default export): videos
+    (every N maps, frames per second, the first and the last maps, the format), instantaneous maps (the maps chosen,
+    every N maps)."""
     choice = spec["choice"]
-    out = {"video_" + name for name in ("step", "fps", "format") if choice[name] != DEFAULT_EXPORT[name]}
-    if (int(choice["first"] or 1), choice["last"]) != (int(DEFAULT_EXPORT["first"] or 1), DEFAULT_EXPORT["last"]):
+    ref = reference["choice"] if reference is not None else DEFAULT_EXPORT
+    out = {"video_" + name for name in ("step", "fps", "format") if choice[name] != ref[name]}
+    if (int(choice["first"] or 1), choice["last"]) != (int(ref["first"] or 1), ref["last"]):
         out.add("video_maps")
-    if choice.get("map"):
+    if (choice.get("map"), choice.get("map_last")) != (ref.get("map"), ref.get("map_last")):
         out.add("images_maps")
-    if (choice.get("map_step") or 1) != 1:
+    if (choice.get("map_step") or 1) != (ref.get("map_step") or 1):
         out.add("images_step")
     return out
 
@@ -98,7 +108,8 @@ class VideoBox:
         self.info = ttk.Label(e, foreground="#555555", wraplength=width + 20, justify=tk.LEFT)
         self.info.grid(row=r + 4, column=0, columnspan=3, sticky=tk.W)
         label("Format", "format").grid(row=r + 5, column=0, sticky=tk.W, pady=1)
-        self.box = ttk.Combobox(e, values=list(FORMAT_LABELS.values()), state="readonly", width=18)
+        self.box = ttk.Combobox(e, values=list(FORMAT_LABELS.values()), state="readonly",
+                                width=18 if width >= 200 else 11)
         self.box.grid(row=r + 5, column=1, columnspan=2, sticky=tk.W, pady=1)
         self.box.bind("<<ComboboxSelected>>", lambda event: (self.format.set(
             next(k for k, v in FORMAT_LABELS.items() if v == self.box.get())), callback()))
@@ -209,81 +220,122 @@ class QuantitiesEditor(ttk.Frame):
     maps: their number, their times; set_post), None if unknown; loader: a function giving it when it is needed (a
     summary of a video of the quantity selected with its video on, the times of the instantaneous maps moved), with
     n_maps the number of maps meanwhile (set_loader); ptv: the vector fields are those of a PTV (set_ptv; None:
-    unknown), the quantities of the PTV greyed out if not; missing: why the quantities of the images and of their POD
-    can't be exported ({key: reason}, set_imaging), those greyed out."""
+    unknown), the quantities of the PTV greyed out if not, those of the quality of a PIV if so; missing: why the
+    quantities of the images and of their POD can't be exported ({key: reason}, set_imaging), those greyed out; jet:
+    the jet theory add-on is on (set_jet; None: unknown), its quantities greyed out if not; piv: they are those of a
+    PIV (set_methods), the quantities of the quality of a PIV greyed out if not. reference: the export specification
+    the quantities are compared with (set_reference; the default export). stacked: the parameters of the quantity and
+    the global settings below the quantities, in tabs (a narrow column), else at their right and below them."""
 
-    def __init__(self, master, spec, rolling=False, on_change=None, height=20, post=None):
+    def __init__(self, master, spec, rolling=False, on_change=None, height=20, post=None, stacked=False):
         super().__init__(master)
         self.spec, self.rolling, self.on_change, self.post = export_spec(copy.deepcopy(spec)), rolling, on_change, post
-        self.loader, self.n_maps, self.ptv, self.missing = None, None, None, {}
+        self.loader, self.n_maps, self.ptv, self.missing, self.jet = None, None, None, {}, None
+        self.piv, self.reference, self.greyed = None, export_spec(None), {}
         # The pictures of the POD modes exported: one per mode of the range, or their sum, a figure of each map
         self.pod_images, self.pod_per_map = 1, False
         self.key, self.loading, self.enabled = None, False, True
         self.marks = {}  # The labels of the parameters marked ≠ when they are changed: {name: (widget, text)}
-        ttk.Label(self, text=f"Images, Video: click to export them ({CHECKED}: exported, {UNCHECKED}: not exported, "
-                             f"{UNAVAILABLE}: rolling average dependent), on a group to export all of its quantities "
-                             f"or none ({PARTIAL}: some); greyed: not available (the PTV quantities: for the "
-                             "results of a PTV only; the images and the POD: when they are found); ≠: "
-                             "changed from the default.", foreground="#555555", wraplength=900,
-                  justify=tk.LEFT).pack(anchor=tk.W)
+        help_ = (f"Images, Video: click to export them ({CHECKED}: exported, {UNCHECKED}: not exported, "
+                 f"{UNAVAILABLE}: rolling average dependent), on a group to export all of its quantities or none "
+                 f"({PARTIAL}: some); greyed (folded): not available (the PTV quantities: for the results of a PTV "
+                 "only, the PIV ones for those of a PIV; the images and the POD: when they are found; the jet theory: "
+                 "with the add-on on); bold: parameters that differ from the reference (↺: its parameters); ≠: the "
+                 "parameters that differ.")
+        top = ttk.Frame(self)
+        top.pack(fill=tk.X)
+        ttk.Label(top, text="Quantities exported", foreground="#555555").pack(side=tk.LEFT)
+        HelpDot(top, help_).pack(side=tk.LEFT, padx=(4, 0))
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        # Left: the quantities, the global settings below them; right: the quantity selected
+        # Left: the quantities, the global settings below them; right: the quantity selected (stacked: both below the
+        # quantities, in tabs)
         left = ttk.Frame(body)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left.pack(side=tk.TOP if stacked else tk.LEFT, fill=tk.BOTH, expand=True)
         rows = ttk.Frame(left)
         rows.pack(fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(rows, columns=("images", "video", "params"), height=height, selectmode="browse")
-        for column, text, width in (("#0", "Quantity", 200), ("images", "Images", 50), ("video", "Video", 44),
-                                    ("params", "Parameters", 80)):
-            self.tree.heading(column, text=text, anchor=tk.W if column in ("#0", "params") else tk.CENTER)
-            self.tree.column(column, width=width, anchor=tk.W if column in ("#0", "params") else tk.CENTER,
-                             stretch=column == "params")
+        self.tree = ttk.Treeview(rows, columns=("images", "video", "reset"), height=height, selectmode="browse")
+        for column, text, width in (("#0", "Quantity", 190), ("images", "Images", 48), ("video", "Video", 42),
+                                    ("reset", "↺", 26)):
+            self.tree.heading(column, text=text, anchor=tk.W if column == "#0" else tk.CENTER)
+            self.tree.column(column, width=width, anchor=tk.W if column == "#0" else tk.CENTER,
+                             stretch=column == "#0", minwidth=width if column != "#0" else 100)
         bar = ttk.Scrollbar(rows, command=self.tree.yview)
         self.tree.configure(yscrollcommand=bar.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         bar.pack(side=tk.LEFT, fill=tk.Y)
-        self.groups = {}  # The quantities of each group: {its row: keys}
+        # The quantities of each group: {its row: keys}; as the menus of the tiles: the groups of a submenu
+        # (MENU_PARENTS) in its row, the quantities at the root of the menus at the root
+        self.groups = {}
         for group, keys in FIGURE_GROUPS:
-            gid = "group|" + (group or "Other")
-            self.groups[gid] = list(keys)
-            self.tree.insert("", tk.END, iid=gid, text=group or "Other", open=True)
+            parent = ""
+            if group in MENU_PARENTS:
+                parent = "parent|" + MENU_PARENTS[group]
+                if parent not in self.groups:
+                    self.groups[parent] = []
+                    self.tree.insert("", tk.END, iid=parent, text=MENU_PARENTS[group], open=True)
+                self.groups[parent] += list(keys)
+            if group is None:
+                gid = parent
+            else:
+                gid = "group|" + group
+                self.groups[gid] = list(keys)
+                self.tree.insert(parent, tk.END, iid=gid, text=group, open=True)
             for key in keys:
                 self.tree.insert(gid, tk.END, iid=key, text=FIGURE_TITLES[key])
         self.tree.tag_configure("unavailable", foreground="#9a9a9a")
+        self.tree.tag_configure("differs", font=("TkDefaultFont", 9, "bold"))
         self.tree.bind("<<TreeviewSelect>>", lambda event: self.select())
         self.tree.bind("<Button-1>", self.click, add="+")
-        boxes = ttk.LabelFrame(left, text="Global", padding=6)
-        boxes.pack(fill=tk.X, pady=(6, 0))
-        self.global_video = VideoBox(self, boxes, "Videos", marks="video_", width=220)
-        self.global_video.frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.global_images = ImagesBox(self, boxes, "Instantaneous maps", marks="images_", width=220)
-        self.global_images.frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        # All the quantities exported, or none: right below them, with the count
         row = ttk.Frame(left)
-        row.pack(fill=tk.X, pady=(6, 0))
-        # All the quantities exported, or none
+        row.pack(fill=tk.X, pady=(4, 0))
         self.check_buttons = [ttk.Button(row, text=text, command=lambda on=on: self.check_all(on))
                               for text, on in (("Check all", True), ("Uncheck all", False))]
         for n, button in enumerate(self.check_buttons):
             button.pack(side=tk.LEFT, padx=(0 if n == 0 else 6, 0))
-        self.reset_button = ttk.Button(row, text="Reset all quantities to the default", command=self.reset)
-        self.reset_button.pack(side=tk.LEFT, padx=(12, 0))
         self.summary = ttk.Label(row, foreground="#555555")
-        self.summary.pack(side=tk.LEFT, padx=(10, 0))
-        side = ttk.Frame(body)
-        side.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
-        self.params_frame = ttk.LabelFrame(side, text="Parameters of the quantity", padding=6)
+        self.summary.pack(side=tk.LEFT, padx=(8, 0))
+        self.stacked = stacked
+        if stacked:
+            below = ttk.Frame(body)
+            below.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(6, 0))
+            frames = []
+            for title in ("Global", "Selected quantity"):
+                frame = ttk.LabelFrame(below, text=title, padding=(4, 2))
+                frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0 if not frames else 4, 0))
+                scrolled = ScrolledFrame(frame, height=220)
+                scrolled.pack(fill=tk.BOTH, expand=True)
+                frames.append(scrolled.inner)
+            boxes, side = frames
+            width = 120
+        else:
+            boxes = ttk.LabelFrame(left, text="Global", padding=6)
+            boxes.pack(fill=tk.X, pady=(6, 0))
+            side = ttk.Frame(body)
+            side.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
+            width = 220
+        self.global_video = VideoBox(self, boxes, "Videos", marks="video_", width=width)
+        self.global_images = ImagesBox(self, boxes, "Instantaneous maps", marks="images_", width=width)
+        for n, box in enumerate((self.global_video, self.global_images)):
+            if stacked:
+                box.frame.pack(side=tk.TOP, fill=tk.X, pady=(0 if n == 0 else 6, 0))
+            else:
+                box.frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0 if n == 0 else 6, 0))
+        if stacked:
+            self.params_frame = ttk.Frame(side)
+        else:
+            self.params_frame = ttk.LabelFrame(side, text="Parameters of the quantity", padding=6)
         self.params_frame.pack(fill=tk.X)
         self.build_params()
         # Its video and its instantaneous maps (overriding the global settings), with its parameters
-        self.video_box = VideoBox(self, self.params_frame, "Video", override=True, width=240)
-        self.video_box.frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        self.images_box = ImagesBox(self, self.params_frame, "Instantaneous maps", override=True, width=240)
-        self.images_box.frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        self.reset_quantity_button = ttk.Button(side, text="Reset this quantity to defaults",
-                                                command=self.reset_quantity)
-        self.reset_quantity_button.pack(anchor=tk.W, pady=(6, 0))
-        self.note = ttk.Label(side, foreground="#a33", wraplength=330, justify=tk.LEFT)
+        self.video_box = VideoBox(self, self.params_frame, "Video", override=True,
+                                  width=width if stacked else width + 20)
+        self.video_box.frame.grid(row=20, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.images_box = ImagesBox(self, self.params_frame, "Instantaneous maps", override=True,
+                                    width=width if stacked else width + 20)
+        self.images_box.frame.grid(row=21, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.note = ttk.Label(side, foreground="#a33", wraplength=width + (40 if stacked else 100), justify=tk.LEFT)
         self.note.pack(anchor=tk.W, pady=(4, 0))
         self.show(self.spec)
         if post is not None:
@@ -295,40 +347,51 @@ class QuantitiesEditor(ttk.Frame):
     # ------------------------------------------------------------------ widgets
 
     def build_params(self):
+        """The parameters of the quantity selected: each label with its widgets at its right, or below it (stacked: a
+        narrow column)."""
         e = self.params_frame
-        self.title_label = ttk.Label(e, font=("TkDefaultFont", 9, "bold"), wraplength=320)
+        stacked = self.stacked
+        self.title_label = ttk.Label(e, font=("TkDefaultFont", 9, "bold"), wraplength=170 if stacked else 320)
         self.title_label.grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
         self.vmin, self.vmax, self.contour = tk.StringVar(self), tk.StringVar(self), tk.StringVar(self)
         self.cmap, self.compare = tk.StringVar(self), tk.StringVar(self)
-        self.mark("clims", ttk.Label(e, text="Colour range (min, max)")).grid(row=1, column=0, sticky=tk.W)
+
+        def place(r, name, text, widget, columnspan=2):
+            """A parameter (row r): its label, marked ≠ when it differs (name), and its widget."""
+            label = self.mark(name, ttk.Label(e, text=text))
+            if stacked:
+                label.grid(row=2 * r - 1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
+                widget.grid(row=2 * r, column=0, columnspan=columnspan, sticky=tk.W)
+            else:
+                label.grid(row=r, column=0, sticky=tk.W, pady=(4 if r > 1 else 0, 0))
+                widget.grid(row=r, column=1, columnspan=columnspan, sticky=tk.W, pady=(4 if r > 1 else 0, 0))
         row = ttk.Frame(e)
-        row.grid(row=1, column=1, columnspan=2, sticky=tk.W)
+        place(1, "clims", "Colour range (min, max)", row)
         self.map_widgets = []
         for var in (self.vmin, self.vmax):
             entry = ttk.Entry(row, textvariable=var, width=7)
             entry.pack(side=tk.LEFT, padx=(0, 4))
             self.map_widgets.append(entry)
-        self.mark("cmaps", ttk.Label(e, text="Colour map")).grid(row=2, column=0, sticky=tk.W, pady=(4, 0))
-        box = ttk.Combobox(e, textvariable=self.cmap, values=[AUTO] + list(COLORMAPS), state="readonly", width=13)
-        box.grid(row=2, column=1, columnspan=2, sticky=tk.W, pady=(4, 0))
+        box = ttk.Combobox(e, textvariable=self.cmap, values=[AUTO] + list(COLORMAPS), state="readonly",
+                           width=11 if stacked else 13)
+        place(2, "cmaps", "Colour map", box)
         self.map_widgets.append(box)
-        self.mark("contours", ttk.Label(e, text="Isocontour (empty: none)")).grid(row=3, column=0, sticky=tk.W,
-                                                                                pady=(4, 0))
         entry = ttk.Entry(e, textvariable=self.contour, width=10)
-        entry.grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(4, 0))
+        place(3, "contours", "Isocontour (empty: none)", entry)
         self.map_widgets.append(entry)
-        self.mark("compares", ttk.Label(e, text="Compare with")).grid(row=4, column=0, sticky=tk.W, pady=(4, 0))
-        self.compare_box = ttk.Combobox(e, textvariable=self.compare, state="readonly", width=16,
+        self.compare_box = ttk.Combobox(e, textvariable=self.compare, state="readonly", width=12 if stacked else 16,
                                         values=[NONE] + [FIGURE_TITLES[k] for k in MAP_FIGURES])
-        self.compare_box.grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=(4, 0))
+        place(4, "compares", "Compare with", self.compare_box)
         self.map_widgets.append(self.compare_box)
-        self.mark("wipers", ttk.Label(e, text="Wiper position")).grid(row=5, column=0, sticky=tk.W, pady=(4, 0))
         self.wiper = tk.DoubleVar(self, COMPARE_FRACTION)
-        self.wiper_scale = ttk.Scale(e, from_=0, to=1, variable=self.wiper, orient=tk.HORIZONTAL, length=120,
+        wiper = ttk.Frame(e)
+        self.wiper_scale = ttk.Scale(wiper, from_=0, to=1, variable=self.wiper, orient=tk.HORIZONTAL,
+                                     length=100 if stacked else 120,
                                      command=lambda value: self.quantity_changed())
-        self.wiper_scale.grid(row=5, column=1, sticky=tk.W, pady=(4, 0))
-        self.wiper_label = ttk.Label(e, width=5)
-        self.wiper_label.grid(row=5, column=2, sticky=tk.W, pady=(4, 0))
+        self.wiper_scale.pack(side=tk.LEFT)
+        self.wiper_label = ttk.Label(wiper, width=5)
+        self.wiper_label.pack(side=tk.LEFT)
+        place(5, "wipers", "Wiper position", wiper)
         self.map_widgets.append(self.wiper_scale)
         for var in (self.vmin, self.vmax, self.contour, self.cmap, self.compare):
             var.trace_add("write", lambda *args: self.quantity_changed())
@@ -339,9 +402,9 @@ class QuantitiesEditor(ttk.Frame):
         return widget
 
     def update_marks(self):
-        """The parameters of the quantity selected and the global settings changed from the default: ≠."""
-        changed = (quantity_changes(self.spec, self.key) if self.key is not None else set())
-        changed |= global_changes(self.spec)
+        """The parameters of the quantity selected and the global settings that differ from the reference: ≠."""
+        changed = (quantity_changes(self.spec, self.key, self.reference) if self.key is not None else set())
+        changed |= global_changes(self.spec, self.reference)
         for name, (widget, text) in self.marks.items():
             widget.configure(text=text + ("  ≠" if name in changed else ""))
 
@@ -367,14 +430,32 @@ class QuantitiesEditor(ttk.Frame):
         self.n_maps = post.fields.n if post is not None else None
         if post is not None:
             self.ptv, self.missing = post.ptv(), self.reasons(post.imaging_unavailable())
+            self.piv, self.jet = not self.ptv, bool(post.settings.jet_theory)
             self.pod_images, self.pod_per_map = max(len(post.pod_modes_exported()), 1), post.pod_combined()
             self.refresh_tags()
             self.refresh_rows(["pod_mode"])  # Its video possible or not
         self.set_range()
 
     def set_ptv(self, ptv):
-        """The vector fields are those of a PTV (None: unknown): the quantities of the PTV greyed out if not."""
-        self.ptv = ptv
+        """The vector fields are those of a PTV (None: unknown): the quantities of the PTV greyed out if not, those of
+        the quality of a PIV if so."""
+        self.set_methods(None if ptv is None else not ptv, ptv)
+
+    def set_methods(self, piv, ptv):
+        """The vector fields (of all the projects of a node) have those of a PIV, those of a PTV (None: unknown): the
+        quantities of the quality of a PIV greyed out without PIV, those of the PTV without PTV."""
+        self.piv, self.ptv = piv, ptv
+        self.refresh_tags()
+
+    def set_reference(self, reference):
+        """The export specification the quantities are compared with (None: the default export)."""
+        self.reference = export_spec(copy.deepcopy(reference))
+        self.refresh_rows()
+        self.update_marks()
+
+    def set_jet(self, on):
+        """The jet theory add-on is on (None: unknown): its quantities greyed out if not."""
+        self.jet = on
         self.refresh_tags()
 
     def set_imaging(self, missing):
@@ -389,20 +470,36 @@ class QuantitiesEditor(ttk.Frame):
 
     def unavailable(self, key):
         """Why a quantity can't be exported (None if it can): one of the PTV for vector fields that aren't those of
-        a PTV, one of the images or of their POD not found; a group when none of its quantities can."""
-        if self.ptv is False and (key in PTV_KEYS or key == PTV_GROUP_ROW):
+        a PTV, one of the quality of a PIV for those of a PTV, one of the images or of their POD not found, one of the
+        jet theory with the add-on off; a group when none of its quantities can."""
+        if self.ptv is False and key in PTV_KEYS:
             return "The quantities of the PTV: for the results of a PTV only"
+        if self.piv is False and key in PIV_KEYS:
+            return "The quantities of the PIV: for the results of a PIV only"
+        if self.jet is False and key in JET_KEYS:
+            return "The jet theory add-on is off (recipe of the post-processing)"
         if key in self.groups:
             reasons = [self.unavailable(k) for k in self.groups[key]]
             return None if not all(reasons) else "; ".join(dict.fromkeys(reasons))
         return self.missing.get(key)
 
     def refresh_tags(self):
-        """The quantities (and groups) that can't be exported greyed out; the count of the images exported."""
+        """The quantities (and groups) that can't be exported greyed out (the groups folded, unfolded once they can
+        be), those whose parameters differ from the reference in bold; the count of the images exported."""
         for iid in list(FIGURE_TITLES) + list(self.groups):
             if self.tree.exists(iid):
-                self.tree.item(iid, tags=("unavailable",) if self.unavailable(iid) else ())
+                greyed = bool(self.unavailable(iid))
+                tags = (("unavailable",) if greyed else ()) + (("differs",) if self.differs(iid) else ())
+                self.tree.item(iid, tags=tags)
+                if iid in self.groups and self.greyed.get(iid) != greyed:
+                    self.tree.item(iid, open=not greyed)
+                    self.greyed[iid] = greyed
         self.summary["text"] = self.count()
+
+    def differs(self, iid):
+        """The parameters of a quantity (of one of the quantities of a group) differ from those of the reference."""
+        keys = self.groups.get(iid, [iid] if iid in FIGURE_TITLES else [])
+        return any(quantity_changes(self.spec, k, self.reference) for k in keys)
 
     def set_loader(self, loader, n_maps):
         """The post-processing given by loader() when a summary needs it (the maps: n_maps, None if unknown)."""
@@ -449,7 +546,7 @@ class QuantitiesEditor(ttk.Frame):
             self.global_images.set(self, choice.get("map"), choice.get("map_last"), choice.get("map_step"))
             for box in (self.global_video, self.global_images):
                 box.enable(enabled)
-            for button in [self.reset_button, self.reset_quantity_button] + self.check_buttons:
+            for button in self.check_buttons:
                 button.state(["!disabled"] if enabled else ["disabled"])
         finally:
             self.loading = False
@@ -535,9 +632,9 @@ class QuantitiesEditor(ttk.Frame):
         for key in keys or FIGURE_TITLES:
             images = choice["figures"] is None or key in choice["figures"]
             video = key in choice["videos"]
-            n = len(quantity_changes(spec, key))
             video_cell = (CHECKED if video else UNCHECKED) if self.per_map(key) else UNAVAILABLE
-            self.tree.item(key, values=(CHECKED if images else UNCHECKED, video_cell, f"{n} different" if n else ""))
+            self.tree.item(key, values=(CHECKED if images else UNCHECKED, video_cell,
+                                        "↺" if self.differs(key) else ""))
         # The groups: all of their quantities exported, none or some (their videos: of those that can have one)
         figures = set(FIGURE_TITLES if choice["figures"] is None else choice["figures"])
 
@@ -548,8 +645,9 @@ class QuantitiesEditor(ttk.Frame):
             return UNAVAILABLE if not keys else CHECKED if n == len(keys) else UNCHECKED if not n else PARTIAL
         for gid, keys in self.groups.items():
             self.tree.item(gid, values=(cell(keys, figures),
-                                        cell([k for k in keys if self.per_map(k)], set(choice["videos"])), ""))
-        self.summary["text"] = self.count()
+                                        cell([k for k in keys if self.per_map(k)], set(choice["videos"])),
+                                        "↺" if self.differs(gid) else ""))
+        self.refresh_tags()
 
     def count(self):
         """The images exported (each instantaneous map of the instantaneous figures: the global ones, or their own)
@@ -572,8 +670,7 @@ class QuantitiesEditor(ttk.Frame):
             else:
                 total += 1
         videos = [k for k in choice["videos"] if self.per_map(k) and not self.unavailable(k)]
-        return f"{total} images ({len(figures)} figures), {len(videos)} videos" + ("" if self.known() else
-                                                                                   " (maps unknown)")
+        return f"{total} images, {len(videos)} videos" + ("" if self.known() else " (maps unknown)")
 
     # ------------------------------------------------------------------ changes
 
@@ -581,6 +678,11 @@ class QuantitiesEditor(ttk.Frame):
         """A click in the column Images or Video: the images or the video of the quantity exported or not (the
         video only if possible); on a group, those of all of its quantities (group_click)."""
         column, key = self.tree.identify_column(event.x), self.tree.identify_row(event.y)
+        if key and column == "#3":
+            # ↺: the parameters of the reference (of the quantities of a group)
+            if self.tree.set(key, "reset") and self.enabled:
+                self.reset_quantity(key)
+            return "break"
         reason = self.unavailable(key) if key else None
         if reason and column in ("#1", "#2"):
             self.bell()
@@ -745,36 +847,29 @@ class QuantitiesEditor(ttk.Frame):
         self.update_marks()
         self.report(problems)
 
-    def reset_quantity(self):
-        """Reset this quantity to defaults: its images exported, no video, no parameter, video settings nor
-        instantaneous maps of its own."""
-        key, spec = self.key, self.spec
-        if key is None or not self.enabled:
+    def reset_quantity(self, iid=None):
+        """A quantity (the one selected by default; or all those of a group) with the parameters of the reference: its
+        colour range, colour map, isocontour, second quantity, wiper position, video settings and instantaneous maps
+        of its own (whether its images and its video are exported kept)."""
+        iid = self.key if iid is None else iid
+        keys = self.groups.get(iid, [iid] if iid in FIGURE_TITLES else [])
+        if not keys or not self.enabled:
             return
-        choice = spec["choice"]
-        if choice["figures"] is not None and key not in choice["figures"]:
-            figures = choice["figures"] + [key]
-            choice["figures"] = (None if set(figures) == set(FIGURE_TITLES)
-                                 else [k for k in FIGURE_TITLES if k in figures])
-        choice["videos"] = [k for k in choice["videos"] if k != key]
-        for values in spec["params"].values():
-            values.pop(key, None)
-        spec["videos"].pop(key, None)
-        spec["images"].pop(key, None)
-        self.refresh_rows([key])
-        self.select()
-        self.report([])
-
-    def reset(self):
-        """Reset all quantities to the default (asked first): the default export (all the images, no video, no
-        parameter, video settings nor instantaneous maps of their own, the default global settings)."""
-        if not self.enabled:
-            return
-        if not messagebox.askyesno("Quantities", "Reset all the quantities to the default export? Their parameters, "
-                                                 "their videos and the global settings are lost.",
-                                   parent=self.winfo_toplevel()):
-            return
-        self.show(export_spec(None), None, self.enabled)
+        spec, reference = self.spec, self.reference
+        for key in keys:
+            for name in QUANTITY_PARAMS + ("wipers",):
+                if key in reference["params"][name]:
+                    spec["params"][name][key] = copy.deepcopy(reference["params"][name][key])
+                else:
+                    spec["params"][name].pop(key, None)
+            for part in ("videos", "images"):
+                if key in reference[part]:
+                    spec[part][key] = copy.deepcopy(reference[part][key])
+                else:
+                    spec[part].pop(key, None)
+        self.refresh_rows(keys)
+        if self.key in keys:
+            self.select()
         self.report([])
 
 
@@ -782,11 +877,13 @@ class QuantitiesDialog(Dialog):
     """The window Quantities: the quantities of an export specification and their parameters (QuantitiesEditor). The
     result: the specification, None if cancelled."""
 
-    def __init__(self, parent, spec, rolling=False, title="Quantities", post=None):
+    def __init__(self, parent, spec, rolling=False, title="Quantities", post=None, jet=None):
         super().__init__(parent, title)
         self.resizable(True, True)
         self.editor = QuantitiesEditor(self.frame, spec, rolling, post=post)
         self.editor.set_post(post)
+        if post is None:
+            self.editor.set_jet(jet)  # The jet theory add-on of the recipe (that of the vector fields otherwise)
         self.editor.show(self.editor.spec, rolling)
         self.editor.pack(fill=tk.BOTH, expand=True)
         buttons = ttk.Frame(self.frame)

@@ -141,12 +141,10 @@ class ImageAnalysis:
         return (raw if key == "raw_image" else piv_images)[first]
 
     def read_image(self, path):
-        """An image as drawn (2D, its intensities; the mean of the channels of a colour image), the last ones kept."""
+        """An image as drawn (2D, its intensities as every step reads them: imread), the last ones kept."""
         cache = self.__dict__.setdefault("image_cache", {})
         if path not in cache:
             A = imread(path)
-            if A.ndim == 3:
-                A = A[..., :3].mean(-1)
             if len(cache) >= IMAGE_CACHE:
                 cache.pop(next(iter(cache)))
             cache[path] = A

@@ -10,7 +10,7 @@ Each chunk keeps the seconds its pairs took: the message done gives the seconds 
 the chunks resumed. The messages are JSON lines on the standard output: progress, field (the last pair computed,
 saved in latest.npz at most every second, to be shown while the computation runs), log, done, stopped or error.
 
-It only needs numpy, Pillow and PaIRS-UniNa (pip install PaIRS-UniNa, Python 3.10 to 3.13): the Python
+It only needs numpy, Pillow (and velocihub/greyscale.py, loaded from its file) and PaIRS-UniNa (pip install PaIRS-UniNa, Python 3.10 to 3.13): the Python
 interpreter running it may differ from the one of the interface. From PIV_PAIRS_batch.py.
 """
 import json
@@ -20,10 +20,24 @@ import time
 import traceback
 
 import numpy as np
-from PIL import Image
 
 
 LATEST_EVERY = 1.0  # Seconds between two fields sent while the pairs are computed
+
+
+def load_greyscale():
+    """velocihub/greyscale.py, the reader of the images of every step of VelociHub, loaded from its file: this script
+    runs under another interpreter, which may not have VelociHub."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "greyscale.py")
+    spec = importlib.util.spec_from_file_location("velocihub_greyscale", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GREYSCALE = load_greyscale()
 
 
 def say(**message):
@@ -50,53 +64,69 @@ def save_latest(work, k, xpx, ypx, u, v, sn, inf):
 
 
 def read(path):
-    """Image as floats (the mean of the channels of a color image). A network or USB drive sometimes refuses a
-    read for a moment: it is tried again."""
-    for attempt in range(5):
-        try:
-            with Image.open(path) as im:
-                a = np.asarray(im, dtype=np.float64)
-            return a.mean(axis=2) if a.ndim == 3 else a
-        except OSError:
-            if attempt == 4:
-                raise
-            time.sleep(3)
+    """Image as floats, read as every step of VelociHub reads it (greyscale.read_grey: the brightness of a colour
+    image), tried again if a network or USB drive refuses the read for a moment."""
+    return GREYSCALE.read_grey(path).astype(np.float64)
 
 
-def make_piv(settings, h, w):
-    """PaIRS "standard" process (as in the PaIRS GUI), built from Python."""
+# The settings of the PaIRS process as PaIRS numbers them (pairs_engine.PAIRS_CODES; the job gives them: codes),
+# those of its standard process for the jobs of the previous versions, without them
+STANDARD = {"image_interpolation": 53, "velocity_interpolation": 52, "peak_interpolation": 0, "median_test": 2,
+            "outlier_replacement": 1, "correlation_window": 0, "predictor_window": 0, "max_displacement": -4}
+DEFAULTS = {"border": True, "median_kernel": 1, "median_threshold": 2.0, "median_epsilon": 0.5, "sn_threshold": 0.0,
+            "cc_threshold": 0.0, "second_peak": True, "predictor_halfwidth": 0}
+
+
+def make_piv(settings, h, w, codes=None):
+    """The PaIRS process (its standard process, as in the PaIRS GUI, with the settings of the engine; codes: the
+    choices of the settings as PaIRS numbers them), built from Python."""
     import PaIRS_UniNa.PaIRS_PIV as PaIRS_lib
     from PaIRS_UniNa.Process_Tab import PROpar
 
-    wsize = list(settings["windows"])
-    sp = [max(1, int(round(s * (1 - settings["overlap"] / 100)))) for s in wsize]
+    s = {**DEFAULTS, **settings}
+    codes = {**STANDARD, **(codes or {})}
+
+    def code(key):
+        return int(codes[key])
+
+    wsize = list(s["windows"])
+    sp = [max(1, int(round(size * (1 - s["overlap"] / 100)))) for size in wsize]
     PRO = PROpar(top=3, WSize=wsize, WSpac=sp)
-    PRO.NIterazioni = settings["final_iterations"]
+    PRO.NIterazioni = s["final_iterations"]
     piv = PaIRS_lib.PIV()
     piv.DefaultValues()
     piv.Inp.FlagNumThreads = 0  # 0 = all CPU cores
     piv.SetVect([np.array(v).astype(np.intc) for v in PRO.Vect])
-    piv.Inp.FlagBordo = PRO.FlagBordo
+    piv.Inp.FlagBordo = 1 if s["border"] else 0
     piv.Inp.NIterazioni = PRO.NIterazioni
-    piv.Inp.IntIniz, piv.Inp.FlagInt, piv.Inp.IntFin = PRO.IntIniz, PRO.FlagInt, PRO.IntFin
-    piv.Inp.IntCorr = PRO.IntCorr + 3
-    piv.Inp.IntVel = PRO.IntVel
-    piv.Inp.FlagValid = 1 if PRO.TypeMed == 0 else 2
-    piv.Inp.SemiDimValid, piv.Inp.SogliaMed, piv.Inp.ErroreMed = PRO.KernMed, PRO.SogliaMed, PRO.ErroreMed
-    piv.Inp.FlagAttivaValSN = (1 if PRO.FlagSNTest else 0) | (2 if PRO.FlagCPTest else 0)
-    piv.Inp.SogliaSN, piv.Inp.SogliaFcl = PRO.SogliaSN, PRO.SogliaCP
+    piv.Inp.IntIniz = piv.Inp.IntFin = code("image_interpolation")
+    piv.Inp.FlagInt = PRO.FlagInt
+    piv.Inp.IntCorr = code("peak_interpolation") + 3
+    piv.Inp.IntVel = code("velocity_interpolation")
+    piv.Inp.FlagValid = code("median_test")
+    piv.Inp.SemiDimValid, piv.Inp.SogliaMed = int(s["median_kernel"]), float(s["median_threshold"])
+    piv.Inp.ErroreMed = float(s["median_epsilon"])
+    piv.Inp.FlagAttivaValSN = (1 if s["sn_threshold"] > 0 else 0) | (2 if s["cc_threshold"] > 0 else 0)
+    piv.Inp.SogliaSN = float(s["sn_threshold"]) if s["sn_threshold"] > 0 else PRO.SogliaSN
+    piv.Inp.SogliaFcl = float(s["cc_threshold"]) if s["cc_threshold"] > 0 else PRO.SogliaCP
     piv.Inp.FlagValidNog = 0
     piv.Inp.SogliaMedia, piv.Inp.SogliaNumVet = PRO.SogliaMedia, PRO.SogliaNumVet
     # Minimum mean / std per window: the PaIRS defaults (2 and 3 grey levels) reject almost every window of dark
     # images; 0.01 / 0.05 only reject windows without any particle
-    piv.Inp.SogliaNoise, piv.Inp.SogliaStd = settings["min_mean"], settings["min_std"]
+    piv.Inp.SogliaNoise, piv.Inp.SogliaStd = s["min_mean"], s["min_std"]
     piv.Inp.FlagCorrHart = 0
-    piv.Inp.FlagSecMax = 1 if PRO.FlagSecMax else 0
-    piv.Inp.FlagCorrezioneVel = PRO.FlagCorrezioneVel
+    piv.Inp.FlagSecMax = 1 if s["second_peak"] else 0
+    piv.Inp.FlagCorrezioneVel = code("outlier_replacement")
     piv.Inp.InfoSi, piv.Inp.InfoNo = 1, 0
-    piv.Inp.FlagWindowing = getattr(PRO, "FlagWindowing", 0)
+    piv.Inp.FlagWindowing = code("correlation_window")
+    # The windowing of each pass (Astarita 2007): max displacement, weighting windows of the predictor and of the
+    # correlation map, half-width of the predictor window, direct correlation
     vw = [np.array(v, dtype=np.intc) for v in (PRO.vMaxDisp, PRO.vFlagCalcVel, PRO.vFlagWindowing,
                                                 PRO.vSemiDimCalcVel, PRO.vDC)]
+    vw[0][:] = code("max_displacement")
+    vw[1][:] = code("predictor_window")
+    vw[2][:] = code("correlation_window")
+    vw[3][:] = int(s["predictor_halfwidth"])
     vw[4][:] = 0  # No direct correlation, so PaIRS returns the peak ratio
     piv.Inp.FlagDirectCorr = PRO.FlagDirectCorr
     piv.Inp.numInitIt = max(len(wsize), *[len(v) for v in vw])
@@ -156,7 +186,7 @@ def compute(job, work):
             np.save(bfile, background)
 
     try:
-        piv, fun, real = make_piv(s, h, w)
+        piv, fun, real = make_piv(s, h, w, job.get("codes"))
     except ImportError as e:
         say(type="error", text=f"PaIRS-UniNa can't be imported by {sys.executable}: {e}")
         return

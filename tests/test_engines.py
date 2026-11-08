@@ -30,7 +30,7 @@ def check_jet(post, window=16):
     where the first passes of a PIV still count, not compared to the pixel)."""
     with post.all_maps():
         mean_u = post.statistics()["mean_U"]
-    y_px = s.HEIGHT / 2 - post.fields.y[:, 0]  # Rows from the top of the images
+    y_px = s.HEIGHT - post.fields.y[:, 0]  # Rows from the top of the images (sensor space: y from the bottom)
     profile = np.nanmedian(mean_u, axis=1)
     centre = int(np.argmin(np.abs(y_px - s.HEIGHT / 2)))
     offsets = np.linspace(-window / 2, window / 2, 33)

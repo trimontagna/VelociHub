@@ -3,10 +3,10 @@ workspace file (VelociHub_workspace.json by default, wherever the user saves it)
 projects: the tree of the folders from each root to its projects, as the panel Projects shows it.
 
 A project is a folder with a project file (VelociHub_project.json), with images (two or more: pre-processing and PIV),
-or with PIV/PTV results (PIV/vectors.npz, as velocihub/archiving/post_archive.py finds them, or vectors.npz in the folder itself:
-its maps folder; and PTV/vectors.npz: a project may have both, shown apart in the panel Projects). The subfolders of
-the results (PreProcessing, PIV, PTV, PostProcessing, PostProcessing_PTV, the export folders of its project file)
-and the figures stitched (Stitched) aren't scanned.
+or with the results of a velocimetry pipeline (pipelines.py: PIV/vectors.npz of PaIRS, PTV/vectors.npz of TracTrac...,
+or vectors.npz in the folder itself; a project may have several, shown apart in the panel Projects). The subfolders of
+the results (PreProcessing, those of the pipelines, PostProcessing, PostProcessing_PTV, the export folders of its
+project file) and the figures stitched (Stitched) aren't scanned.
 
 Roots: folders scanned at each refresh (scan=True), or the folder of a project added alone (scan=False: only that
 project, nothing else detected there). The projects removed by the user (excluded) aren't added again by the scans.
@@ -27,6 +27,7 @@ import time
 from dataclasses import asdict, dataclass
 
 from .fields import PIV_FOLDER, PTV_FOLDER, VECTORS_FILE
+from .pipelines import results_folder_names, results_folders
 from .postprocessing import POSTPROCESSING_FOLDER, POSTPROCESSING_PTV_FOLDER
 from .preprocessing import IMAGE_EXTENSIONS, PREPROCESSING_FOLDER
 from .project import PROJECT_FILES, read_project
@@ -38,7 +39,7 @@ LEGACY_WORKSPACE_FORMATS = ("PPP workspace",)
 WORKSPACE_VERSION = 1
 # Subfolders not scanned: the results of the steps and the figures stitched (velocihub/archiving/post_archive.py)
 SKIPPED_FOLDERS = {PREPROCESSING_FOLDER, PIV_FOLDER, PTV_FOLDER, POSTPROCESSING_FOLDER, POSTPROCESSING_PTV_FOLDER,
-                   "Stitched"}
+                   "Stitched"} | results_folder_names()
 # Images exported by the post-processing (figures): not images of a measurement
 FIGURE_NAMES = ("_PostProcessing_", "_Stitched_")
 
@@ -58,9 +59,10 @@ def inside(path, folder):
 class Project:
     """A project of the workspace: its folder, its root and its path from it (the folders of the tree, joined by
     "/"; "" for a root that is a project), the name given in the workspace (None: its own), what it has (images,
-    PIV/PTV results, project file), its maps folder (vectors.npz elsewhere than PIV: absolute; None: PIV), whether
-    it has the results of a PTV (PTV/vectors.npz: with those of a PIV or alone, then its maps folder), the
-    signature of its contents and whether it was lost (not found at the last refresh)."""
+    results of the velocimetry, project file), its maps folder (its first results: absolute), the folders of its
+    results by pipeline (pipelines: {label: folder relative to the project}, in the order of the pipelines; None: not
+    detected yet, a workspace of the previous versions), the signature of its contents and whether it was lost (not
+    found at the last refresh)."""
 
     folder: str
     root: str
@@ -72,21 +74,16 @@ class Project:
     maps: str = None
     signature: str = None
     lost: bool = False
-    ptv: bool = False
+    pipelines: dict = None
 
     def label(self):
         return self.name or (self.path.rsplit("/", 1)[-1] if self.path else os.path.basename(self.folder))
 
     def results_folders(self):
-        """The folders of its results by method ({"PIV": folder, "PTV": folder}: those it has; PIV for vectors.npz in
-        the folder itself)."""
-        out = {}
-        ptv = os.path.join(self.folder, PTV_FOLDER)
-        if self.results and not (self.maps and key(self.maps) == key(ptv)):
-            out["PIV"] = self.maps or os.path.join(self.folder, PIV_FOLDER)
-        if self.ptv:
-            out["PTV"] = ptv
-        return out
+        """The folders of its results by pipeline ({"PaIRS": folder, "TracTrac": folder}: those it has)."""
+        if self.pipelines is None:
+            return results_folders(self.folder) if self.results and os.path.isdir(self.folder) else {}
+        return {label: os.path.normpath(os.path.join(self.folder, rel)) for label, rel in self.pipelines.items()}
 
 
 def image_names(folder, names=None):
@@ -98,21 +95,18 @@ def image_names(folder, names=None):
 
 def detect(folder, names=None):
     """What a folder holds as a project: None if it isn't one, else (images, results, project file, maps folder,
-    exported folders, signature, PTV results): images (two or more), PIV/PTV results (PIV/vectors.npz, or vectors.npz
-    in it: that folder is then its maps folder; else PTV/vectors.npz, then its maps folder), project file, the export
-    folders of its project file (not scanned) and whether it has the results of a PTV (PTV/vectors.npz)."""
+    exported folders, signature, pipelines): images (two or more), results of the velocimetry, project file, its maps
+    folder (its first results), the export folders of its project file (not scanned) and the folders of its results
+    by pipeline ({label: folder relative to it}; pipelines.results_folders)."""
     try:
         names = os.listdir(folder) if names is None else names
     except OSError:
         return None
     images = image_names(folder, names)
-    maps = None
-    results = os.path.isfile(os.path.join(folder, PIV_FOLDER, VECTORS_FILE))
-    ptv = os.path.isfile(os.path.join(folder, PTV_FOLDER, VECTORS_FILE))
-    if not results and VECTORS_FILE in names and os.path.basename(folder) not in (PIV_FOLDER, PTV_FOLDER):
-        results, maps = True, folder
-    if not results and ptv:
-        results, maps = True, os.path.join(folder, PTV_FOLDER)
+    found = ({} if os.path.basename(folder) in results_folder_names() and VECTORS_FILE in names
+             else results_folders(folder))
+    results = bool(found)
+    maps = next(iter(found.values()), None)
     has_file = any(n in names for n in PROJECT_FILES)
     if len(images) < 2 and not results and not has_file:
         return None
@@ -130,7 +124,8 @@ def detect(folder, names=None):
     vectors = os.path.join(maps or os.path.join(folder, PIV_FOLDER), VECTORS_FILE)
     signature = (f"images:{len(images)}:{images[0]}:{images[-1]}" if len(images) >= 2
                  else f"vectors:{os.path.getsize(vectors)}" if results else None)
-    return len(images) >= 2, results, has_file, maps, exported, signature, ptv
+    pipelines = {label: os.path.relpath(path, folder) for label, path in found.items()}
+    return len(images) >= 2, results, has_file, maps, exported, signature, pipelines
 
 
 def scan(root):
@@ -269,7 +264,7 @@ class Workspace:
 
     @staticmethod
     def update(project, info):
-        project.images, project.results, project.project_file, maps, _, project.signature, project.ptv = info
+        project.images, project.results, project.project_file, maps, _, project.signature, project.pipelines = info
         project.maps = maps
         project.lost = False
 

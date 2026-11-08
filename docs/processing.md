@@ -34,8 +34,9 @@ Modules: `velocihub/piv/` (`base.py`: `PIVRun`, `Camera`, engines; `pairs_engine
 - **Particles in the windows**: a seeding diagnostic independent of the engine. Three nested windows (64, 32, 16 px by
   default) on the image, moved by click/drag, resized with the mouse wheel; the largest is magnified with the
   particles circled and counted in each window (about **10 particles per window** are needed).
-- **Quality of the pairs**: valid vectors (%) and median correlation peak ratio per pair (PIV), or valid cells (%),
-  particles tracked per pair and the histogram of track lengths (PTV); click a point to show that pair.
+- **Quality of the pairs**: valid vectors (%) and median correlation peak ratio per pair (PIV), or the particles
+  tracked per pair and the histogram of track lengths (PTV: no valid-cell percentage, not a reliable quality of its
+  binning); click a point to show that pair.
 - **Masks**: vectors whose window centre is masked get status 2 (masked) and are excluded everywhere.
 
 ## Parameters
@@ -61,6 +62,27 @@ Modules: `velocihub/piv/` (`base.py`: `PIVRun`, `Camera`, engines; `pairs_engine
 | Min. window mean (grey levels) | `min_mean` | 0.01 | Darker windows are not correlated. PaIRS's own default (2) rejects almost every window of dark images; 0.01 only rejects windows without particles (masked areas). |
 | Min. window std (grey levels) | `min_std` | 0.05 | Windows with less contrast are not correlated (PaIRS default 3). |
 | Subtract the mean image | `subtract_mean` | False | Subtracts the mean of about 200 images from each image. Not needed after the POD background removal. |
+| First vector one spacing from the edge | `border` | True | PaIRS: the first vector at a distance equal to the spacing from the image border (else the first window touches it). |
+| Image interpolation | `image_interpolation` | `bspline3` | PaIRS: interpolation of the image deformation, multigrid passes and final iterations: `bspline3`/`5`/`7` (B-spline of order 3, 5, 7), `bicubic`, `biquadratic`, `bilinear`, `simplex`, `linrev` (linear revitalized), `sinc3` (sinc, half-width 3), `shift5` (shift theorem, width 5), `moving` (moving window: shifted, not deformed), `none`. |
+| Predictor interpolation | `velocity_interpolation` | `bspline2` | PaIRS: interpolation of the dense predictor (the displacement of every pixel, from the vectors of the previous pass): `bspline2`/`3`, `bilinear`, `linrev`, `simplex`, `shift`. |
+| Peak interpolation | `peak_interpolation` | `gauss` | PaIRS: sub-pixel interpolation of the correlation peak: `gauss` (Gaussian, classic), `gauss_rev` (reviewed), `simplex`. Its bias is the peak locking. |
+| Median test | `median_test` | `universal` | PaIRS: `universal` (normalized median test, Westerweel & Scarano 2005), `classic`, `none`. Outliers are replaced and marked invalid. |
+| Median test semi-kernel | `median_kernel` | 1 | PaIRS: neighbours within this many spacings ((2n + 1)² − 1 of them). |
+| Median test threshold | `median_threshold` | 2.0 | PaIRS: threshold on the normalized residual (advised 2, range 1-3). |
+| Median test epsilon (px) | `median_epsilon` | 0.5 | PaIRS: minimum value of the normalization (advised 0.1-0.5 px; 0: no limit). |
+| S/N test threshold | `sn_threshold` | 0 (off) | PaIRS: threshold on the ratio of the two highest correlation peaks (advised 1.5). |
+| Correlation peak test | `cc_threshold` | 0 (off) | PaIRS: minimum correlation peak allowed (advised 0.25). |
+| Outlier replacement | `outlier_replacement` | `weighted` | PaIRS: `weighted` (distance-weighted average of the valid neighbours), `average`, `iterative`. |
+| Correct with the second peak | `second_peak` | True | PaIRS: an outlier first replaced by the displacement of the second correlation peak, when it passes the test. |
+| Correlation weighting window | `correlation_window` | `tophat` | PaIRS (Astarita 2007): weighting window of the interrogation windows: `tophat` (none), `tophat50`, `nogueira`, `blackman`, `bharris` (Blackman-Harris), `hann`, `triangular`. |
+| Displacement weighting window | `predictor_window` | `tophat` | PaIRS: weighting window that filters the predictor between iterations: `tophat`, `nogueira`, `blackman`, `bharris`, `hann`, `triangular`. |
+| Displacement window half-width | `predictor_halfwidth` | 0 | PaIRS: its semi-size in vectors (0: that of the interrogation window). |
+| Max. displacement (of the window) | `max_displacement` | `1/4` | PaIRS: the largest displacement allowed, as a fraction of the window (`1/2`, `1/3`, `1/4`, `1/5`). |
+
+The defaults are the PaIRS *standard* process (what VelociHub always used before); the help of each setting in the
+page (?) follows the PaIRS interface. The direct correlation stays off, so that PaIRS gives the correlation peak
+ratio. The images are read in one channel as every step reads them (`velocihub/greyscale.py`: the brightness
+max(R, G, B) of a colour image).
 
 ### TracTrac (PTV)
 

@@ -34,7 +34,7 @@ from ..batch import valid_percent
 from ..fields import MATH_FONT, load_vectors, nanmedian
 from ..piv.particles import DEFAULT_DIAMETER, DEFAULT_SNR, MIN_PARTICLES, count_particles
 from ..preprocessing import describe_images, folder_images, imread, imwrite, num2str, rasterize_masks, same_path
-from ..project import format_duration, piv_results, run_time
+from ..project import format_duration, piv_results, run_time, valid_text
 from .batch_dialog import BatchStep, Field, PanelForm, PanelPage, run_batch
 from .widgets import FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, SidePanel
 from ..prefs import getpref, setpref
@@ -555,8 +555,9 @@ class PIVPage(Page):
         self.chosen = (None, [], None)  # Images of the folder chosen: (folder, paths, preprocessing.json)
         self.results = None  # Vector fields of the results folder (vectors.npz), loaded when shown
         self.results_checked = False
-        # Quality of the pairs computed: valid vectors (%) and median peak ratio (PIV), or valid cells (%) and
-        # particles tracked (PTV: monitor_ptv); the curves drawn and the lengths of the tracks of the results
+        # Quality of the pairs computed (2 x pairs): valid vectors (%) and median peak ratio (PIV), or particles
+        # tracked (PTV: monitor_ptv; the first row unused); the curves drawn and the lengths of the tracks of the
+        # results
         self.monitor = None
         self.monitor_ptv = False
         self.monitor_drawn = 0.0
@@ -837,7 +838,8 @@ class PIVPage(Page):
         self.update_particles()
         self.figure_pair.message("Image pairs\n\nSelect the training images in the page Pre-processing")
         self.figure_pair.set_slider(1, 0)
-        self.figure_monitor.message("Quality of the pairs computed: valid vectors and correlation peak ratio")
+        self.figure_monitor.message("Quality of the pairs computed: valid vectors and correlation peak ratio (PIV), "
+                                    "particles tracked (PTV)")
         self.overlay = []
         self.drawn = (None, None)
         self.monitor_line = None
@@ -904,8 +906,7 @@ class PIVPage(Page):
             f = self.results
             seconds = run_time(f.settings)
             residual = f.settings.get("regression_median_residual_px")
-            text = (f"{f.n} pairs ({f.settings.get('date', '')}), "
-                    f"{valid_percent(f):.1f} % valid vectors"
+            text = (f"{f.n} pairs ({f.settings.get('date', '')})" + valid_text(valid_percent(f))
                     + (f", run time {format_duration(seconds)}" if seconds is not None else "")
                     + (f"; PTV with {f.settings.get('engine')}, {np.mean(f.particles[:, f.status == 0]):.2f} particles "
                        "per cell" if f.particles is not None and (f.status == 0).any() else "")
@@ -1323,14 +1324,14 @@ class PIVPage(Page):
 
     def show_monitor(self, current_only=False, upto=None):
         """Quality of the pairs computed, the pair shown marked: valid vectors and median correlation peak ratio
-        (PIV), or valid cells and particles tracked, with the lengths of the tracks of the results (PTV). upto: only
+        (PIV), or particles tracked, with the lengths of the tracks of the results (PTV). upto: only
         the pairs up to this one (the pair just computed, shown while the PIV runs: the mark is on the last
         point)."""
         panel = self.figure_monitor
         data = self.monitor_data()
         if data is None:
-            panel.message("Quality of the pairs computed: valid vectors and correlation peak ratio (PIV), valid "
-                          "cells, particles tracked and lengths of the tracks (PTV)")
+            panel.message("Quality of the pairs computed: valid vectors and correlation peak ratio (PIV), "
+                          "particles tracked and lengths of the tracks (PTV)")
             self.monitor_curves = None
             return
         if upto is not None:
@@ -1343,13 +1344,12 @@ class PIVPage(Page):
             return
         ptv = self.monitor_ptv
         n = data.shape[1]
-        done = np.isfinite(data[0]).sum()
-        valid = np.nanmean(data[0]) if done else float("nan")
+        done = np.isfinite(data[1 if ptv else 0]).sum()
         if ptv:
-            tracked = np.nanmedian(data[1]) if np.isfinite(data[1]).any() else float("nan")
-            title = (f"Quality of the pairs: {done} of {n} computed, {valid:.1f} % valid cells on average, "
-                     f"{tracked:.0f} particles tracked per pair (median)")
+            tracked = np.nanmedian(data[1]) if done else float("nan")
+            title = f"Quality of the pairs: {done} of {n} computed, {tracked:.0f} particles tracked per pair (median)"
         else:
+            valid = np.nanmean(data[0]) if done else float("nan")
             title = f"Quality of the pairs: {done} of {n} computed, {valid:.1f} % valid vectors on average"
         lengths = self.results_track_lengths() if ptv else None
         layout = (ptv, n, lengths is not None and self.track_lengths[0])
@@ -1357,7 +1357,7 @@ class PIVPage(Page):
         curves = self.monitor_curves
         if curves is not None and curves[0] == layout and curves[1][0].axes in fig.axes:
             # The same graph: the curves are updated (faster than drawing the figure again)
-            for curve, values in zip(curves[1], data):
+            for curve, values in zip(curves[1], data[1:] if ptv else data):
                 curve.set_ydata(values)
                 curve.axes.relim()
                 curve.axes.autoscale_view(scalex=False)
@@ -1371,18 +1371,25 @@ class PIVPage(Page):
                 else:
                     ax, hist = fig.add_subplot(), None
                 k = np.arange(1, n + 1)
-                first, = ax.plot(k, data[0], color="#2a78d6", lw=1)
-                ax.set_ylabel("Valid cells (%)" if ptv else "Valid vectors (%)", color="#2a78d6")
                 ax.set_xlabel("Pair")
                 ax.set_xlim(0.5, n + 0.5)
-                twin = ax.twinx()
-                second, = twin.plot(k, data[1], color="#eb6834", lw=1)
-                twin.set_ylabel("Particles tracked" if ptv else "Median peak ratio $S/N$", color="#eb6834")
+                if ptv:
+                    # The particles tracked only (the valid cells of the binning aren't a reliable quality)
+                    first, = ax.plot(k, data[1], color="#eb6834", lw=1)
+                    ax.set_ylabel("Particles tracked", color="#eb6834")
+                    drawn = (first,)
+                else:
+                    first, = ax.plot(k, data[0], color="#2a78d6", lw=1)
+                    ax.set_ylabel("Valid vectors (%)", color="#2a78d6")
+                    twin = ax.twinx()
+                    second, = twin.plot(k, data[1], color="#eb6834", lw=1)
+                    twin.set_ylabel("Median peak ratio $S/N$", color="#eb6834")
+                    drawn = (first, second)
                 self.monitor_line = ax.axvline(self.index + 1, color="0.4", lw=1, ls="--")
                 ax.set_title(title, fontsize="medium")
                 if hist is not None:
                     self.draw_track_lengths(hist, lengths)
-                self.monitor_curves = (layout, (first, second))
+                self.monitor_curves = (layout, drawn)
         panel.canvas.draw_idle()
         self.monitor_drawn = time.monotonic()
 
@@ -1428,9 +1435,8 @@ class PIVPage(Page):
         return self.track_lengths[1]
 
     def monitor_data(self):
-        """Quality of the pairs computed (2 x pairs): valid vectors (%) and median peak ratio (PIV), or valid cells
-        (%) and particles tracked (PTV: monitor_ptv), of the PIV/PTV running or of its results. None if there are
-        none."""
+        """Quality of the pairs computed (2 x pairs): valid vectors (%) and median peak ratio (PIV), or NaN and
+        particles tracked (PTV: monitor_ptv), of the PIV/PTV running or of its results. None if there are none."""
         if self.monitor is None and self.results is not None:
             f = self.results
             flow = f.status == 0
@@ -1439,20 +1445,21 @@ class PIVPage(Page):
                 second = (f.particles.reshape(f.n, -1).sum(1).astype(float) if self.monitor_ptv
                           else nanmedian(f.peak_ratio[:, flow], 1) if f.peak_ratio is not None
                           else np.full(f.n, np.nan))
-                self.monitor = np.vstack([100 * f.piv_valid[:, flow].mean(1), second])
+                first = np.full(f.n, np.nan) if self.monitor_ptv else 100 * f.piv_valid[:, flow].mean(1)
+                self.monitor = np.vstack([first, second])
         return self.monitor
 
     def pair_quality(self, fields, k=0):
         """Valid vectors (%) of the map k of vector fields at the grid points with flow (those of the results if they
         have the same grid: a pair computed alone can't tell where the particles are missing; or else all but the
-        masked ones), and its median peak ratio (PIV) or its particles tracked (PTV)."""
+        masked ones) and its median peak ratio (PIV), or NaN and its particles tracked (PTV)."""
         r = self.results
         flow = r.status == 0 if r is not None and r.shape == fields.shape else fields.status != 2
+        if fields.particles is not None:
+            return np.nan, float(fields.particles[k].sum())
         if not flow.any():
             return np.nan, np.nan
         valid = 100 * float(fields.piv_valid[k][flow].mean())
-        if fields.particles is not None:
-            return valid, float(fields.particles[k].sum())
         peaks = np.asarray(fields.peak_ratio[k][flow] if fields.peak_ratio is not None else [], float)
         peaks = peaks[np.isfinite(peaks)]
         return valid, float(np.median(peaks)) if peaks.size else np.nan
@@ -1719,19 +1726,19 @@ class PIVPage(Page):
             else:
                 panel.progress_label["text"] = f"Pairs computed before: {done} of {total}"
             k = message.get("pair")
-            # With the valid vectors: the median peak ratio (PIV) or the particles tracked (PTV)
-            second = "particles" if self.monitor_ptv else "peak_ratio"
-            if k is not None and message.get("valid") is not None:
-                self.monitor[:, k] = message["valid"], message.get(second) or np.nan
-            if message.get("resumed") and isinstance(message.get("valid"), list):
-                # The quality of the pairs computed before the PIV was stopped
-                first, valids = message.get("first", 0), message["valid"]
-                seconds = list(message.get(second) or [])
-                seconds += [None] * (len(valids) - len(seconds))
-                for i, (valid, value) in enumerate(zip(valids, seconds)):
+            # The valid vectors and the median peak ratio (PIV), or the particles tracked (PTV)
+            row = 1 if self.monitor_ptv else 0
+            names = ("particles",) if self.monitor_ptv else ("valid", "peak_ratio")
+            values = [message.get(name) for name in names]
+            if k is not None and values[0] is not None and not isinstance(values[0], list):
+                self.monitor[row:, k] = [np.nan if v is None else v for v in values]
+            if message.get("resumed") and isinstance(values[0], list):
+                # The quality of the pairs computed before the PIV/PTV was stopped
+                first = message.get("first", 0)
+                lists = [list(v or []) + [None] * (len(values[0]) - len(v or [])) for v in values]
+                for i, pair in enumerate(zip(*lists)):
                     if first + i < self.monitor.shape[1]:
-                        self.monitor[:, first + i] = (np.nan if valid is None else valid,
-                                                      np.nan if value is None else value)
+                        self.monitor[row:, first + i] = [np.nan if v is None else v for v in pair]
             # The quality is drawn with the pair shown while the PIV is followed (every 5 s if no pair is shown),
             # every 2 s otherwise
             if time.monotonic() - self.monitor_drawn > (5 if self.following() else 2):
@@ -1754,7 +1761,7 @@ class PIVPage(Page):
             if took and resumed:
                 took += f" (with {resumed} pairs computed before the PIV/PTV was stopped)"
             panel.progress["value"] = 1
-            panel.progress_label["text"] = f"Done: {f.n} pairs, {valid:.1f} % valid vectors{took}"
+            panel.progress_label["text"] = f"Done: {f.n} pairs{valid_text(valid)}{took}"
             # Shown with the images, unless other images (or another results folder) were chosen meanwhile
             current = bool(self.pre.Check_imsel and same_path(run.info["measurement_folder"], self.pre.path_in)
                            and same_path(os.path.dirname(path), self.output_folder()))
@@ -1767,12 +1774,12 @@ class PIVPage(Page):
             if post is not None:
                 post.piv_done(path, f)
             failed = message.get("failed", 0)
-            text = (f"PIV/PTV done: {f.n} pairs, {valid:.1f} % valid vectors{took}"
+            text = (f"PIV/PTV done: {f.n} pairs{valid_text(valid)}{took}"
                     + (f", {failed} pair(s) failed" if failed else "") + ". Results: ")
             app.update_status(text + path)
             if current:
                 app.log_step("piv", text + app.project_path(path))
-            app.msgbox(f"The PIV/PTV is done: {f.n} pairs, {valid:.1f} % valid vectors{took}.\n\nThe vector fields are "
+            app.msgbox(f"The PIV/PTV is done: {f.n} pairs{valid_text(valid)}{took}.\n\nThe vector fields are "
                        f"saved in {os.path.dirname(path)}"
                        + (" and shown in the page Post-processing." if post else "."), "PIV/PTV")
             return True
@@ -1899,9 +1906,9 @@ class PIVPage(Page):
                                 pass
                         self.test_particles = (index, particles)
                         valid, peak = self.pair_quality(fields)
-                        text = f"Pair {index + 1}: {valid:.1f} % valid vectors, " + (
-                            f"median peak ratio {peak:.2f}" if fields.particles is None else
-                            f"{np.mean(fields.particles[0][fields.status != 2]):.2f} particles per cell")
+                        text = (f"Pair {index + 1}: {valid:.1f} % valid vectors, median peak ratio {peak:.2f}"
+                                if fields.particles is None else f"Pair {index + 1}: "
+                                f"{np.mean(fields.particles[0][fields.status != 2]):.2f} particles per cell")
                         self.panel.progress_label["text"] = text
                         self.app.update_status(text)
                         # Its quality replaces the one of the PIV in the graph

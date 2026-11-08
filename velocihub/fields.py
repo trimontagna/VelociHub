@@ -15,6 +15,7 @@ velocities in m/s (or over u_ref), times in s (or in flow times t_flow).
 import glob
 import json
 import os
+import re
 import shutil
 import warnings
 import zipfile
@@ -70,6 +71,8 @@ SENSOR_TEXTS = [(r"\mathbf{u}", "d"), (r"\overline{u'v'}", r"\overline{d_x'd_y'}
 
 # DynamicStudio CSV exports: header lines before the names of the columns, and the columns read
 CSV_SKIPROWS = 8
+# The time of the first image of a map (ms) at the end of the name of a DynamicStudio CSV export (csv_times)
+CSV_TIME = re.compile(r"-(\d+(?:\.\d*)?)$")
 CSV_COLUMNS = {"i": "X[-]", "j": "Y[-]", "x": "X (m)[m]", "y": "Y (m)[m]", "U": "U[m/s]", "V": "V[m/s]",
                "status": "Status[-]", "peak_ratio": "Peak height ratio[-]"}
 
@@ -113,11 +116,12 @@ class VectorFields:
     """Vector fields on a regular grid: arrays (map, row, column), the rows along y (upwards) and the columns
     along x (to the right).
 
-    x, y: positions (mm), x including the offset of the field of view, y upwards from the middle of the height
-    of the images (the jet comes from the left, centred in the images); U, V: velocities (m/s), NaN where the
-    vector isn't valid; u_px, v_px: displacements (px), None if unknown; valid: valid vectors; status: grid points
-    without flow (0: flow, 1: no particles, 2: masked); t: time of each map (s); peak_ratio: correlation peak
-    ratio (None if unknown); dt: time between the images of a pair (s); scale: mm per pixel; name: name of the
+    x, y: positions (mm), from the origin of the axes of the camera (piv.Camera.x_shift, y_shift: the bottom-left
+    corner of the images by default) plus the offsets of the field of view, y upwards; U, V: velocities (m/s), NaN
+    where the vector isn't valid; u_px, v_px: displacements (px), None if unknown; valid: valid vectors; status: grid
+    points without flow (0: flow, 1: no particles, 2: masked); t: time of each map (s); peak_ratio: correlation peak
+    ratio (None if unknown); dt: time between the images of a pair (s); scale: mm per pixel horizontally (the
+    horizontal pixel pitch); scale_y: vertically (None: scale, square pixels); name: name of the
     measurement; folder: folder of the measurement (of the images; the post-processing is exported in its
     subfolder PostProcessing); source: file or folder read; settings: those of the PIV; piv_valid: the valid
     vectors of the PIV, which the quality of the PIV uses (valid unless the fields are a regression of them);
@@ -143,6 +147,7 @@ class VectorFields:
     piv_valid: np.ndarray = None
     particles: np.ndarray = None
     tracks: str = ""
+    scale_y: float = None
 
     def __post_init__(self):
         # Rows from the bottom to the top, columns from the left to the right
@@ -154,6 +159,8 @@ class VectorFields:
                 setattr(self, name, getattr(self, name)[:, rows, cols])
         if self.piv_valid is None:
             self.piv_valid = self.valid
+        if self.scale_y is None:
+            self.scale_y = self.scale
 
     n = property(lambda self: self.U.shape[0])
     shape = property(lambda self: self.U.shape[1:])
@@ -162,7 +169,9 @@ class VectorFields:
         text = f"{self.n} maps of {self.shape[1]} x {self.shape[0]} vectors"
         if self.dt:
             text += f", dt = {self.dt * 1000:.4g} ms"
-        if self.scale:
+        if self.scale and self.scale_y and abs(self.scale_y - self.scale) > 1e-12 * self.scale:
+            text += f", {self.scale:.5f} x {self.scale_y:.5f} mm/px"
+        elif self.scale:
             text += f", {self.scale:.5f} mm/px"
         return text
 
@@ -184,12 +193,13 @@ def load_vectors(path, dt=None, scale=None, camera=None, pixels=False):
     DynamicStudio CSV exports: for these, dt (time between the images of a pair, s) and scale (mm/px) give the
     displacements in pixels (peak locking).
 
-    The PIV saves the vector fields in pixels: camera (piv.Camera) converts them into mm and m/s (the scale is the
-    width of its field of view divided by the width of the images). Without camera, they are in pixels (x and y in
-    px with y upwards, U and V in px per pair, settings["units"] = "px"), unless the file has the velocities (PIV
-    with a camera, or the files of the previous versions). y = 0 at the middle of the height of the images (in the
-    files of the previous versions too). pixels: in pixels whatever the file (the sensor space), when the positions
-    of the vectors in the images are known (pixel_positions)."""
+    The PIV saves the vector fields in pixels: camera (piv.Camera) converts them into mm and m/s (the pixel pitches
+    are the width and the height of its field of view divided by those of the images; the origin of the axes is its
+    x_shift, y_shift). Without camera, they are in pixels (x and y in px from the bottom-left corner of the images,
+    y upwards, U and V in px per pair, settings["units"] = "px"), unless the file has the velocities (PIV with a
+    camera, or the files of the previous versions, whose y = 0 is at the middle of the height of the images).
+    pixels: in pixels whatever the file (the sensor space), when the positions of the vectors in the images are
+    known (pixel_positions)."""
     if os.path.isdir(path):
         if os.path.isfile(os.path.join(path, VECTORS_FILE)):
             path = os.path.join(path, VECTORS_FILE)
@@ -210,12 +220,14 @@ def load_vectors(path, dt=None, scale=None, camera=None, pixels=False):
             width, height = settings["image_px"]
             first = np.array([a for a, _ in settings.get("pairs") or []] or range(len(u_px)), np.float64)
             if camera is not None and not pixels:
-                scale, dt = camera.scale(width), camera.dt
-                x, y = x_px * scale + camera.x_offset_mm, (height / 2 - y_px) * scale + camera.y_offset_mm
-                U, V, t = u_px * scale / 1000.0 / dt, v_px * scale / 1000.0 / dt, first / camera.frame_rate_hz
-                settings = {**settings, "camera": asdict(camera), "scale_mm_per_px": scale, "dt_s": dt}
+                x, y = camera.positions(x_px, y_px, width, height)
+                U, V = camera.velocities(u_px, v_px, width, height)
+                t = first / camera.frame_rate_hz
+                settings = {**settings, "camera": asdict(camera), "scale_mm_per_px": camera.scale(width),
+                            "scale_y_mm_per_px": camera.scale_y(width, height), "dt_s": camera.dt}
             else:
-                x, y, U, V, t = x_px, height / 2 - y_px, u_px, v_px, first
+                # The sensor space: px from the bottom-left corner of the images, y upwards
+                x, y, U, V, t = x_px, height - y_px, u_px, v_px, first
                 settings = {**settings, "units": "px", "scale_mm_per_px": 1.0, "dt_s": 1.0}
         else:
             x = z["x_global_mm"] if "x_global_mm" in z.files else z["x_mm"]
@@ -230,6 +242,7 @@ def load_vectors(path, dt=None, scale=None, camera=None, pixels=False):
                               u_px=np.where(valid, u_px, nan), v_px=np.where(valid, v_px, nan),
                               peak_ratio=np.where(piv_valid, z["peak_ratio"], nan) if "peak_ratio" in z.files else None,
                               dt=settings.get("dt_s"), scale=settings.get("scale_mm_per_px"),
+                              scale_y=settings.get("scale_y_mm_per_px"),
                               source=os.path.abspath(path), settings=settings, piv_valid=piv_valid,
                               particles=z["ptv_particles"] if "ptv_particles" in z.files else None)
     results = os.path.dirname(os.path.abspath(path))
@@ -249,10 +262,28 @@ def measurement_folder(path, settings):
         os.path.dirname(results) if os.path.basename(results) in (PIV_FOLDER, PTV_FOLDER) else results)
 
 
-def load_csv_folder(folder, dt=None, scale=None, progress=None):
+def csv_times(files):
+    """Times of the maps (s) given by the names of DynamicStudio CSV exports, the time of their first image in ms
+    after the last dash of the name (e.g. Run.000001-6.6672.csv: 6.6672 ms); None unless every name has one and they
+    increase."""
+    times = []
+    for name in files:
+        m = CSV_TIME.search(os.path.splitext(os.path.basename(name))[0])
+        if m is None:
+            return None
+        times.append(float(m[1]) / 1000.0)
+    times = np.asarray(times)
+    return times if times.size and np.all(np.diff(times) > 0) else None
+
+
+def load_csv_folder(folder, dt=None, scale=None, progress=None, frame_rate_hz=None):
     """Vector fields of a folder of DynamicStudio CSV exports (one file per map, sorted by name; 8 lines before
     the names of the columns): X[-], Y[-] (grid indices), X (m)[m], Y (m)[m], U[m/s], V[m/s], Status[-] (0 =
-    valid) and Peak height ratio[-]. dt (s) and scale (mm/px) give the displacements in pixels."""
+    valid) and Peak height ratio[-]. dt (time between the two images of a pair, s) and scale (mm/px) give the
+    displacements in pixels. The positions are those of the export (mm, from the origin of its calibration). The
+    time of each map: the one of its name (csv_times), else its number over frame_rate_hz (the frame rate of the
+    maps), else its number times dt (time-resolved: each map from the image of the previous one, as a time-resolved
+    PIV is computed; the time between double-frame maps can only come from the names or the frame rate)."""
     files = sorted(glob.glob(os.path.join(folder, "*.csv")))
     if not files:
         raise ValueError(f"No vectors.npz nor CSV files in {folder}")
@@ -275,8 +306,6 @@ def load_csv_folder(folder, dt=None, scale=None, progress=None):
     G = np.full((len(files), j.max() + 1, i.max() + 1, len(keys)), np.nan)
     G[:, j, i] = maps
     x, y = ((G[0, ..., column[k]] * 1000).astype(np.float32) for k in ("x", "y"))
-    # y = 0 at the middle of the grid (the size of the images is unknown)
-    y -= (np.nanmin(y) + np.nanmax(y)) / 2
     stack = {k: G[..., column[k]].astype(np.float32) for k in keys if k not in ("i", "j", "x", "y")}
     valid = stack["status"] == 0
     status = np.where(valid.mean(0) < 0.1, 1, 0).astype(np.int16)
@@ -288,7 +317,10 @@ def load_csv_folder(folder, dt=None, scale=None, progress=None):
         px_per_ms = dt / (scale / 1000)
         u_px, v_px = U * px_per_ms, V * px_per_ms
     peak = np.where(valid, stack["peak_ratio"], nan) if "peak_ratio" in stack else None
-    return VectorFields(x=x, y=y, U=U, V=V, valid=valid, status=status, t=np.arange(len(files)) * (dt or 1.0),
+    t = csv_times(files)
+    if t is None:
+        t = np.arange(len(files)) / frame_rate_hz if frame_rate_hz else np.arange(len(files)) * (dt or 1.0)
+    return VectorFields(x=x, y=y, U=U, V=V, valid=valid, status=status, t=t,
                         u_px=u_px, v_px=v_px, peak_ratio=peak, dt=dt, scale=scale,
                         name=os.path.basename(os.path.abspath(folder)), folder=os.path.abspath(folder),
                         source=os.path.abspath(folder),
@@ -323,6 +355,38 @@ def nanmedian(A, axis):
     high = np.take_along_axis(S, np.maximum(n // 2, 0), axis)
     with np.errstate(invalid="ignore"):
         return np.squeeze(np.where(n > 0, (low + high) / 2, np.nan), axis).astype(S.dtype, copy=False)
+
+
+def outliers(A, k):
+    """Outliers of maps A (map, row, column): the values further than k standard deviations from the mean of the
+    other values of their grid point (leave-one-out: the mean and the standard deviation, N - 2 degrees of freedom,
+    of the N - 1 others), NaN ignored; none at a grid point with fewer than 4 values."""
+    with quiet():
+        finite = np.isfinite(A)
+        n = finite.sum(0)
+        mean = np.nanmean(A, 0, dtype=np.float64)
+        d = np.where(finite, A - mean, 0.0)  # About the mean: no cancellation
+        s2 = (d * d).sum(0)
+        m = n - 1  # The others
+        mean_others = -d / np.maximum(m, 1)  # Their mean, about the mean of all (their sum is -d)
+        var_others = (s2 - d * d - m * mean_others ** 2) / np.maximum(m - 1, 1)
+        far = np.abs(d - mean_others) > k * np.sqrt(np.maximum(var_others, 0.0))
+    return finite & far & (m >= 3)
+
+
+def nanstd1(A):
+    """Sample standard deviation (N - 1) over the maps (axis 0), NaN ignored; NaN with fewer than 2 values."""
+    with quiet():
+        return np.nanstd(A, 0, dtype=np.float64, ddof=1)
+
+
+def nancov1(A, B, mean_A, mean_B):
+    """Sample covariance (N - 1) of A and B over the maps (axis 0) about their means, NaN ignored; NaN with fewer
+    than 2 values."""
+    with quiet():
+        prod = (A - mean_A) * (B - mean_B)
+        n = np.isfinite(prod).sum(0)
+        return np.where(n >= 2, np.nansum(prod, 0, dtype=np.float64) / np.maximum(n - 1, 1), np.nan)
 
 
 def map_indices(indices, n):
@@ -558,13 +622,15 @@ class FieldSettings:
     """Settings common to the analyses of vector fields.
 
     outlier_k: vectors further than outlier_k standard deviations from the mean at their grid point are removed
-        (0: none);
-    use_u_ref, u_ref: the velocities are shown over the reference velocity u_ref (m/s; None: the maximum of the
-        mean u). The turbulence intensity and the default flow time are always relative to it (the maximum of the
-        mean u without use_u_ref);
+        (0: none), the mean and the standard deviation being those of the other vectors of the grid point in the
+        maps of the statistics (all the maps, or the window of the rolling statistics: FieldAnalysis.clean);
+    use_u_ref, u_ref: the velocities are shown over the reference velocity u_ref (m/s; None: the highest mean
+        speed, the norm of the mean velocity). The turbulence intensity and the default flow time are always
+        relative to it (the highest mean speed without use_u_ref);
     use_t_flow, t_flow: the times are shown in flow times t_flow (s; None: L_FoV / u_ref, the time the flow takes
         to cross the field of view);
     l_ref: reference length (mm): the positions are shown as x / L_ref and y / L_ref (None: in mm);
+    nu: kinematic viscosity of the fluid (m²/s): the dissipation of the k-ε scales (air 1.5e-5, water 1.0e-6);
     rolling, rolling_maps: rolling statistics, those of map k over the rolling_maps maps up to it (all the maps
         before it while there are fewer): every figure then has one per map (FieldAnalysis.window).
     The reference quantities are those of the physical space: in the sensor space (vector fields in pixels), pixels
@@ -576,6 +642,7 @@ class FieldSettings:
     use_t_flow: bool = True
     t_flow: float = None
     l_ref: float = None
+    nu: float = 1.5e-5
     rolling: bool = False
     rolling_maps: int = 100
 
@@ -587,7 +654,9 @@ class FieldSettings:
         self.u_ref = float(self.u_ref) if self.u_ref else None
         self.t_flow = float(self.t_flow) if self.t_flow else None
         self.l_ref = float(self.l_ref) if self.l_ref else None
-        for name, label in (("u_ref", "reference velocity"), ("t_flow", "flow time"), ("l_ref", "reference length")):
+        self.nu = float(self.nu) if self.nu is not None else 1.5e-5
+        for name, label in (("u_ref", "reference velocity"), ("t_flow", "flow time"), ("l_ref", "reference length"),
+                            ("nu", "kinematic viscosity")):
             if getattr(self, name) is not None and not getattr(self, name) > 0:
                 raise ValueError(f"The {label} must be positive")
         self.outlier_k = float(self.outlier_k)
@@ -623,8 +692,9 @@ class FieldAnalysis:
     shown over it with use_u_ref, the only others with it in their titles).
 
     The statistics are those of the maps of the window (window): all the maps, or with rolling statistics those up
-    to the map drawn (map_index, set by draw). The analyses of the window are cached by windowed; the outlier
-    filtering and the reference quantities (u_ref, t_flow) are those of all the maps."""
+    to the map drawn (map_index, set by draw). The analyses of the window are cached by windowed, the outlier
+    filtering too (against the statistics of the window); the reference quantities (u_ref, t_flow) are those of all
+    the maps."""
 
     SETTINGS = FieldSettings
     TASK = ""
@@ -693,24 +763,29 @@ class FieldAnalysis:
     # Analyses
 
     def clean(self):
-        """U and V without the outliers (further than outlier_k std from the mean at their grid point), and the
-        number of vectors removed."""
+        """U and V of the maps of the window (window: all the maps, or those of the rolling statistics) without the
+        outliers, and the number of vectors removed. A vector is an outlier when one of its components is further
+        than outlier_k standard deviations from the mean of the others of its grid point in the window: the mean and
+        the standard deviation (N - 2 degrees of freedom) of the N - 1 other vectors, so that the vector doesn't
+        inflate the spread it is compared with (with all N, no vector could be further than sqrt(N - 1) standard
+        deviations: none removed from fewer than 18 maps at 4 standard deviations). A grid point with fewer than 3
+        other vectors keeps its vectors."""
         k = self.settings.outlier_k
 
         def compute():
-            U, V = self.fields.U, self.fields.V
+            a, b = self.window()
+            U, V = self.fields.U[a:b], self.fields.V[a:b]
             if not k:
                 return U, V, 0
-            with quiet():
-                out = ((np.abs(U - np.nanmean(U, 0)) > k * np.nanstd(U, 0))
-                       | (np.abs(V - np.nanmean(V, 0)) > k * np.nanstd(V, 0)))
+            out = outliers(U, k) | outliers(V, k)
             U, V = U.copy(), V.copy()
             U[out] = V[out] = np.nan
             return U, V, int(out.sum())
-        return self.cached("clean", k, compute)
+        return self.windowed("clean", k, compute)
 
     def statistics(self):
-        """Mean, fluctuations (rms, Reynolds shear stress <u'v'>), turbulence intensity
+        """Mean, fluctuations (rms: sample standard deviations, Reynolds shear stress <u'v'>: sample covariance),
+        turbulence intensity
         sqrt((u_rms² + v_rms²) / 2) / U_ref, valid vectors and median peak ratio of the maps of the window, at the
         reliable grid points (in the flow)."""
         s = self.settings
@@ -719,25 +794,30 @@ class FieldAnalysis:
             f = self.fields
             a, b = self.window()
             U, V, n_out = self.clean()
-            U, V = U[a:b], V[a:b]
             with quiet():
                 reliable = f.status == 0
                 mean_U, mean_V = np.nanmean(U, 0, dtype=np.float64), np.nanmean(V, 0, dtype=np.float64)
-                u_rms, v_rms = np.nanstd(U, 0, dtype=np.float64), np.nanstd(V, 0, dtype=np.float64)
-                uv = np.nanmean((U - mean_U) * (V - mean_V), 0, dtype=np.float64)
+                # Sample standard deviations and covariance (N - 1): unbiased with few maps (rolling statistics)
+                u_rms, v_rms = nanstd1(U), nanstd1(V)
+                uv = nancov1(U, V, mean_U, mean_V)
                 peak = (nanmedian(f.peak_ratio[a:b], 0) if f.peak_ratio is not None
                         else np.full(f.shape, np.nan))
             for F in (mean_U, mean_V, u_rms, v_rms, uv, peak):
                 F[~reliable] = np.nan
-            # The reference velocity entered (physical space), else the maximum of the mean u of all the maps
+            # The reference velocity entered (physical space), else the highest mean speed of all the maps (the norm
+            # of the mean velocity: whatever the direction of the flow)
             if (a, b) != (0, f.n):
                 with self.all_maps():
                     u_ref = self.statistics()["u_ref"]
             else:
+                speed = np.hypot(mean_U, mean_V)
                 u_ref = ((s.u_ref if s.use_u_ref and not self.sensor() else None)
-                         or (float(np.nanmax(mean_U)) if np.isfinite(mean_U).any() else 1.0))
+                         or (float(np.nanmax(speed)) if np.isfinite(speed).any() and np.nanmax(speed) > 0 else 1.0))
             ti = 100 * np.sqrt((u_rms ** 2 + v_rms ** 2) / 2) / abs(u_ref)
-            valid = np.where(f.status == 0, 100 * f.piv_valid[a:b].mean(0), np.nan)
+            # The valid vectors of a PIV (not computed for a PTV: the valid cells of its binning aren't a reliable
+            # quality)
+            valid = (np.where(f.status == 0, 100 * f.piv_valid[a:b].mean(0), np.nan) if f.particles is None
+                     else None)
             return dict(mean_U=mean_U, mean_V=mean_V, u_rms=u_rms, v_rms=v_rms, uv=uv, ti=ti, u_ref=u_ref,
                         valid=valid, peak_ratio=peak, reliable=reliable, outliers=n_out)
         return self.windowed("statistics", (s.outlier_k, s.use_u_ref, s.u_ref), compute)
@@ -942,9 +1022,9 @@ class FieldAnalysis:
 
     def plot_y(self, y):
         """Ordinate of positions y of the vector fields in the figures: over L_ref (physical space), or in the image
-        (px from its top, downwards: sensor space)."""
+        (px from its top, downwards: sensor space, where y is from its bottom)."""
         height = self.image_height()
-        return height / 2 - np.asarray(y) if height else np.asarray(y) / self.length()
+        return height - np.asarray(y) if height else np.asarray(y) / self.length()
 
     def position_label(self, name):
         """Label (LaTeX) of an axis of positions: x (mm), or x / L_ref with the reference length (its value given
@@ -985,9 +1065,17 @@ class FieldAnalysis:
 
     def default_flow_time(self):
         """Flow time L_FoV / u_ref (s; frames for vector fields in pixels): the time the flow takes to cross the field
-        of view at the reference velocity."""
-        mm = 1.0 if self.sensor() else 1e-3
-        return self.fov_length() * mm / abs(self.statistics()["u_ref"])
+        of view at the reference velocity. In the sensor space, u_ref is in px per pair, a pair spanning frame_step
+        frames: the flow time in frames is L_FoV / u_ref pairs times frame_step."""
+        if self.sensor():
+            return self.fov_length() / abs(self.statistics()["u_ref"]) * self.frame_step()
+        return self.fov_length() * 1e-3 / abs(self.statistics()["u_ref"])
+
+    def frame_step(self):
+        """Frames between the two images of a pair (1 if unknown)."""
+        pairs = self.fields.settings.get("pairs") or []
+        step = pairs[0][1] - pairs[0][0] if pairs and len(pairs[0]) == 2 else None
+        return int(step) if step and step > 0 else int(self.fields.settings.get("frame_step") or 1)
 
     def flow_time(self):
         """Flow time t_flow (s; frames in the sensor space): the one entered, else L_FoV / u_ref."""

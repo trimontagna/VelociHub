@@ -1,6 +1,7 @@
 """Pre-processing of the PIV images (POD-based background removal), without interface.
 
-The images are processed with a recipe of three optional steps, applied in this order:
+The images are read in one channel (imread: greyscale.read_grey, the brightness V = max(R, G, B) of a colour image,
+as every step of VelociHub reads them), then processed with a recipe of three optional steps, applied in this order:
     1. masks: polygons whose pixels are set to 0;
     2. contrast enhancement: intensity capping, local min-max normalization, CLAHE and edge enhancement, in the
        order chosen, applied before the POD (the modes are those of the enhanced images) or after the background
@@ -10,7 +11,8 @@ The images exported are described in the file preprocessing.json of their folder
 that the PIV uses them if they were processed with the recipe set, instead of processing them again. They are
 exported to the subfolder PreProcessing of the image folder, unless another folder is set (path_export), with the
 spectrum and the modes evaluated (pod.npz, restored by load_pod). They are named [project]_PreProcessing_Image_
-[number].[format of the image]: the project is the name of the folder of the images unless another one is set
+[number].[format]: the format is export_format (EXPORT_FORMATS: that of each source image by default, or PNG, BMP,
+TIFF), the project is the name of the folder of the images unless another one is set
 (project), and the number is the one of the image in the set.
 
 Example:
@@ -45,6 +47,7 @@ from matplotlib.figure import Figure
 from PIL import Image
 from scipy import ndimage
 
+from .greyscale import read_grey, to_grey
 from .project import absolute, comparable_recipe, default_project_name, export_name, relative
 
 BGREMKEY = "backgroundremovaltool000000001"
@@ -74,9 +77,45 @@ WORKERS = min(8, os.cpu_count() or 1)
 
 
 def imread(filename):
-    """MATLAB imread: the image with its original bit depth."""
-    with Image.open(filename) as im:
-        return np.array(im)
+    """The image of a file in one channel, as every step reads it (greyscale.read_grey: the brightness V = max(R, G,
+    B) of a colour image, whatever its colour space), with its original bit depth (8 or 16 bit, 32 bit float)."""
+    return read_grey(filename)
+
+
+# Formats of the images exported: "same" keeps the one of each source image (a JPEG is then compressed again, with
+# losses); the others are lossless. Extension and depths each one holds (BMP: 8 bit; PNG: 8 and 16 bit; TIFF: all)
+EXPORT_FORMATS = {"same": None, "png": ".png", "bmp": ".bmp", "tiff": ".tif"}
+EXPORT_DEPTHS = {"png": (np.uint8, np.uint16), "bmp": (np.uint8,)}
+DEFAULT_EXPORT_FORMAT = "same"
+
+
+def export_format_of(value):
+    """The key of EXPORT_FORMATS of a format written in any way ("TIFF", ".tif", "png", "same"...): ValueError if it
+    is none of them."""
+    key = {"tif": "tiff", "": "same", "none": "same"}.get(str(value or "").strip().lower().lstrip("."),
+                                                       str(value or "").strip().lower().lstrip("."))
+    if key not in EXPORT_FORMATS:
+        raise ValueError(f"Unknown image format {value!r}: one of {', '.join(EXPORT_FORMATS)}")
+    return key
+
+
+def export_extension(fmt, name):
+    """Extension of an image exported in the format fmt (EXPORT_FORMATS) from the source image name."""
+    if fmt not in EXPORT_FORMATS:
+        raise ValueError(f"Unknown image format {fmt!r}: one of {', '.join(EXPORT_FORMATS)}")
+    return EXPORT_FORMATS[fmt] or os.path.splitext(name)[1]
+
+
+def check_export_depth(fmt, dtype, name=""):
+    """ValueError if the format fmt (EXPORT_FORMATS) can't hold images of type dtype (those of the source name with
+    "same")."""
+    if fmt == "same":
+        fmt = {".png": "png", ".bmp": "bmp"}.get(os.path.splitext(name)[1].lower())
+    if fmt in EXPORT_DEPTHS and np.dtype(dtype) not in [np.dtype(d) for d in EXPORT_DEPTHS[fmt]]:
+        depth = {np.dtype(np.uint16): "16 bit", np.dtype(np.float32): "32 bit float"}.get(np.dtype(dtype),
+                                                                                           str(np.dtype(dtype)))
+        raise ValueError(f"{fmt.upper()} can't hold {depth} images: choose TIFF"
+                         + (" or PNG" if np.dtype(dtype) == np.uint16 else ""))
 
 
 def imwrite(A, filename):
@@ -312,12 +351,9 @@ def num2str(x):
 
 
 def as2d(A):
-    """Image as drawn (H x W): a color image as the mean of its color channels (alpha left out), the intensity the
-    PIV reads (piv/pairs_worker.read, imaging.read_image). Not MATLAB's [H, W] = size(A), which put the channels
-    side by side (three images next to each other)."""
-    if A.ndim == 2:
-        return A
-    return A[..., : 3 if A.shape[2] >= 3 else 1].mean(-1)
+    """Image as drawn (H x W): one channel, the intensity every step reads (greyscale.to_grey: the brightness of a
+    colour image). Not MATLAB's [H, W] = size(A), which put the channels side by side."""
+    return to_grey(A)
 
 
 def gram(A, B, progress=None):
@@ -509,8 +545,16 @@ def mode_limits(PHI):
     return -v, v
 
 
-def mode_title(mode, n_modes, n_images):
-    return f"Mode {mode} of {n_modes}\nRecovery ratio: {np.sqrt(1 - mode / n_images):.2f}"
+def mode_title(mode, n_modes, eigVal=None):
+    """Title of a mode: its number, its share of the energy of the images (eigenvalue over their sum) and that of the
+    modes up to it (the energy the background removal of that many modes takes away)."""
+    title = f"Mode {mode} of {n_modes}"
+    eigVal = None if eigVal is None else np.asarray(eigVal, np.float64)
+    if eigVal is not None and eigVal.size >= mode and eigVal.sum() > 0:
+        total = eigVal.sum()
+        title += (f"\nEnergy: {100 * eigVal[mode - 1] / total:.3g} % "
+                  f"(modes 1-{mode}: {100 * eigVal[:mode].sum() / total:.4g} %)")
+    return title
 
 
 ################################################################################
@@ -588,6 +632,8 @@ class PODBackgroundRemoval:
         # Folder of the images exported for the PIV and of the POD saved: None for the subfolder PreProcessing of
         # the image folder
         self.path_export = None
+        # Format of the images exported (EXPORT_FORMATS: "same" as the source images, "png", "bmp" or "tiff")
+        self.export_format = DEFAULT_EXPORT_FORMAT
         self.file_in = []
         self.Use_tmp_file = False
         self.mem_safe = 0.8
@@ -844,13 +890,19 @@ class PODBackgroundRemoval:
 
     def automatic_N_modes(self):
         """Automatic number of modes for the tolerances eps_auto_sigma and eps_auto_psi (spectrum evaluated): the
-        first mode whose temporal mean and energy difference with the next one are below them. 0 if there is
-        none."""
-        eigVal = self.eigVal
+        first mode whose temporal mean |mean psi_i| (the temporal coefficients are normalized: no unit) and energy
+        difference with the next one, |lambda_i - lambda_i+1| / sum lambda (a fraction of the energy of the images,
+        as the spectrum shows it), are below them. 0 if there is none. (The original compared the difference over
+        the median eigenvalue with eps_auto_sigma times the first eigenvalue: a number with the unit of an
+        eigenvalue, so large that the criterion was always met and only the temporal mean decided.)"""
+        eigVal = np.asarray(self.eigVal, np.float64)
+        total = eigVal.sum()
+        if not total > 0:
+            return 0
         for i in range(1, self.NImg):
             Mean_PSI = abs(self.mean_PSI[i - 1])
-            Sig_Diff = abs(eigVal[i - 1] - eigVal[i]) / eigVal[mround(self.NImg / 2) - 1]
-            if Mean_PSI < self.eps_auto_psi and Sig_Diff < self.eps_auto_sigma * eigVal[0]:
+            Sig_Diff = abs(eigVal[i - 1] - eigVal[i]) / total
+            if Mean_PSI < self.eps_auto_psi and Sig_Diff < self.eps_auto_sigma:
                 return i
         return 0
 
@@ -1023,7 +1075,7 @@ class PODBackgroundRemoval:
         """Figure of the spatial mode n."""
         fig = fig or Figure(figsize=(8, 5.5), layout="compressed")
         PHI = self.mode_map(n)
-        draw_image(fig, PHI, cmap, mode_limits(PHI), mode_title(n, self.NMod_saved, self.NImg), MODE_LABEL)
+        draw_image(fig, PHI, cmap, mode_limits(PHI), mode_title(n, self.NMod_saved, self.eigVal), MODE_LABEL)
         return fig
 
     def plot_temporal_coefficient(self, n, fig=None):
@@ -1236,15 +1288,18 @@ class PODBackgroundRemoval:
         subtraction of the first n_modes_removed modes (0: no background removal). The images are the training
         images, or the files of a folder (at most as many as the training images to remove their background:
         the background of the image i is reconstructed with the temporal coefficients of the training image i).
-        They are named [project]_PreProcessing_Image_[number].[format of the image], the number being the one of
-        the image in the set. save_background: also save the backgrounds removed ([project]_PreProcessing_
-        Background_[number]). Returns the files written."""
+        They are named [project]_PreProcessing_Image_[number].[format], the number being the one of the image in
+        the set and the format export_format (that of the source image with "same"). save_background: also save the
+        backgrounds removed ([project]_PreProcessing_Background_[number]). Returns the files written."""
         if folder is None and files is None:
             folder, files = self.path_in, self.file_in
         elif files is None:
             folder, files = self.find_images(folder)
         if self.recipe_empty(n_modes_removed):
             raise ValueError("The recipe is empty: enable the masks or the contrast enhancement, or remove modes")
+        fmt = self.export_format or DEFAULT_EXPORT_FORMAT
+        if files:
+            check_export_depth(fmt, imread(os.path.join(folder, files[0])).dtype, files[0])
         NImg = len(files)
         if n_modes_removed:
             if n_modes_removed > self.NMod_saved:
@@ -1270,7 +1325,7 @@ class PODBackgroundRemoval:
             def export(item):
                 im_i, name = item
                 img, background = self.process_image(os.path.join(folder, name), im_i, modes)
-                extension = os.path.splitext(name)[1]
+                extension = export_extension(fmt, name)
                 # Save single background if requested
                 if save_background and background is not None:
                     imwrite(background, os.path.join(self.path_out, export_name(project, TASK, "Background", im_i + 1,
@@ -1289,7 +1344,8 @@ class PODBackgroundRemoval:
                            "recipe": self.recipe_record(n_modes_removed),
                            "measurement_folder": relative(self.path_in, self.path_out),
                            "source_folder": relative(folder, self.path_in), "source_files": list(files),
-                           "files": [os.path.basename(p) for p in written]}, f, indent=1, ensure_ascii=False)
+                           "format": fmt, "files": [os.path.basename(p) for p in written]}, f, indent=1,
+                          ensure_ascii=False)
 
         self.update_status(" ")
         self.update_status(f"{NImg} images exported in {self.path_out} ({os.path.basename(written[0])} ...). "
@@ -1324,7 +1380,7 @@ class PODBackgroundRemoval:
 
     def preprocessed_images(self, n_modes_removed=0, folders=None):
         """Paths of the training images already exported with the recipe (masks and contrast enhancement if they
-        are enabled, and removal of n_modes_removed modes): those of the first folder whose description matches,
+        are enabled, and removal of n_modes_removed modes) in the format export_format: those of the first folder whose description matches,
         among the folders given, or in the export folder (export_folder). None if there is none."""
         if folders is None:
             folders = [self.export_folder()]
@@ -1338,6 +1394,9 @@ class PODBackgroundRemoval:
             source = absolute(m.get("source_folder"), project) or ""
             if (comparable_recipe(m.get("recipe")) != record or m.get("source_files") != self.file_in
                     or not same_path(source, self.path_in)):
+                continue
+            # In the format chosen (the previous versions kept the one of the source images)
+            if (m.get("format") or DEFAULT_EXPORT_FORMAT) != (self.export_format or DEFAULT_EXPORT_FORMAT):
                 continue
             paths = [os.path.join(folder, name) for name in m.get("files", [])]
             if len(paths) == self.NImg and all(os.path.isfile(p) for p in paths):

@@ -19,7 +19,7 @@ From the command line: velocihub-batch folder [folder ...]
 The post-processing of the PIV results of measurement folders (postprocess_folders), with the camera settings of
 each (its field of view) and a recipe, exports their figures as the interface does:
 
-    camera = vh.Camera(fov_width_mm=196.1, x_offset_mm=0, frame_rate_hz=150)
+    camera = vh.Camera(fov_width_mm=196.1, x_offset_mm=0, frame_rate_hz=150, y_shift=0.5)
     for result in vh.batch.postprocess_folders(folders, camera, vh.PostSettings(outlier_k=4)):
         print(result.describe())
 """
@@ -36,10 +36,10 @@ from . import piv
 from .fields import EXPORT_DPI, load_vectors
 from .postprocessing import PostProcessing, PostSettings, default_export_folder
 from .piv.particles import DEFAULT_DIAMETER, DEFAULT_SNR
-from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_MODES, POD_FILE, PREPROCESSING_FOLDER, ContrastSettings, Mask,
+from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, POD_FILE, PREPROCESSING_FOLDER, ContrastSettings, Mask,
                             PODBackgroundRemoval, list_files, list_images, num2str, read_manifest, str2double)
 from .project import (PROJECT_FILE, clean_name, comparable_recipe, format_duration, piv_results, read_project,
-                      relative, run_time, write_project)
+                      relative, run_time, valid_text, write_project)
 
 # Copy of the project of a folder kept when the batch replaces settings that differ (masks, recipe, PIV settings)
 BACKUP_SUFFIX = ".bak"
@@ -118,7 +118,7 @@ def measurement_masks(folder, root_masks=None):
 class BatchResult:
     """Result of the processing of a folder: status "done", "skipped" (results up to date), "stopped" (the PIV
     stopped: started again, it continues from the chunks of pairs saved) or "failed" (message: why); the vector
-    fields (vectors.npz), their pairs, % of valid vectors, the run time of the PIV and the time of the
+    fields (vectors.npz), their pairs, % of valid vectors (a PIV only), the run time of the PIV and the time of the
     pre-processing (s)."""
 
     folder: str
@@ -134,7 +134,7 @@ class BatchResult:
         if self.status in ("done", "skipped") and self.n_pairs is None:  # Pre-processing only
             return f"{self.status}: {self.message}"
         if self.status in ("done", "skipped"):
-            text = (f"{self.status}: {self.n_pairs} pairs, {self.valid_percent:.1f} % valid vectors"
+            text = (f"{self.status}: {self.n_pairs} pairs" + valid_text(self.valid_percent)
                     + (f", PIV/PTV {format_duration(self.piv_seconds)}" if self.piv_seconds is not None else ""))
             if self.preprocessing_seconds is not None:
                 text += f", pre-processing {format_duration(self.preprocessing_seconds)}"
@@ -155,8 +155,13 @@ def up_to_date(output, engine, settings, recipe, n_pairs, regression=None):
             saved = json.load(f)
     except (OSError, ValueError):
         return False
+    # The settings saved completed with the defaults of the settings added since (those the results had)
+    try:
+        computed = engine.check(saved.get("engine_settings") or {})
+    except (TypeError, ValueError):
+        return False
     return (os.path.isfile(os.path.join(output, piv.VECTORS_FILE)) and saved.get("engine") == engine.name
-            and saved.get("engine_settings") == json.loads(json.dumps(settings))
+            and json.loads(json.dumps(computed)) == json.loads(json.dumps(engine.check(settings)))
             and comparable_recipe(saved.get("preprocessing_recipe")) == comparable_recipe(recipe)
             and saved.get("n_pairs") == n_pairs and saved.get("regression") == piv.regression_record(regression))
 
@@ -174,7 +179,10 @@ def settings_signature(data):
 
 
 def valid_percent(fields):
-    """Valid vectors (%) of the vector fields, in the flow (as the interface shows it)."""
+    """Valid vectors (%) of the vector fields of a PIV, in the flow (as the interface shows it); None for a PTV (the
+    valid cells of its binning aren't a reliable quality)."""
+    if fields.particles is not None:
+        return None
     return 100 * float(fields.piv_valid[:, fields.status == 0].mean())
 
 
@@ -212,6 +220,7 @@ def save_project(session, n_modes, engine, settings, fields, pod_file, history, 
         "automatic_threshold": pre.get("automatic_threshold") or {"eps_sigma": num2str(session.eps_auto_sigma),
                                                                   "eps_psi": num2str(session.eps_auto_psi)},
         "export_folder": rel(session.export_folder()),
+        "export_format": session.export_format,
         "export": export,
         "pod": {"file": rel(pod_file), "modes_evaluated": session.NMod_saved} if pod_file else pre.get("pod")}
     old_piv = state.get("piv") or {}
@@ -330,7 +339,7 @@ def process_folder(folder, pattern=None, engine=None, settings=None, n_modes=DEF
         fields = load_vectors(vectors, pixels=True)
         valid, seconds = valid_percent(fields), run_time(fields.settings)
         failed = len(fields.settings.get("failed_pairs") or [])
-        history.append(entry("piv", f"Batch: PIV/PTV done: {fields.n} pairs, {valid:.1f} % valid vectors in "
+        history.append(entry("piv", f"Batch: PIV/PTV done: {fields.n} pairs{valid_text(valid)} in "
                                     f"{format_duration(seconds)}" + (f", {failed} pair(s) failed" if failed else "")
                                     + f". Results: {relative(vectors, session.path_in)}"))
         # The POD evaluated or restored here, or else the one the project had
@@ -341,7 +350,7 @@ def process_folder(folder, pattern=None, engine=None, settings=None, n_modes=DEF
 
 def apply_preprocessing(session, section):
     """The settings of the pre-processing of a project section (as the interface saves them: masks, contrast,
-    background_removal, export_folder; masks_file: the masks of this file instead) applied to a session. The export folder: the one of the section if it is
+    background_removal, export_folder, export_format; masks_file: the masks of this file instead) applied to a session. The export folder: the one of the section if it is
     inside the folder of the images (relative, e.g. the default PreProcessing), else the default one. Returns the
     number of modes removed (0: no background removal)."""
     masks = masks_from_file(section["masks_file"]) if section.get("masks_file") else section.get("masks") or []
@@ -353,6 +362,7 @@ def apply_preprocessing(session, section):
     folder = section.get("export_folder")
     inside = isinstance(folder, str) and folder and not os.path.isabs(folder) and not folder.startswith("..")
     session.path_export = os.path.normpath(os.path.join(session.path_in, folder if inside else PREPROCESSING_FOLDER))
+    session.export_format = section.get("export_format") or DEFAULT_EXPORT_FORMAT
     bgrem = section.get("background_removal") or {}
     n_modes = str2double(bgrem.get("modes_removed")) if bgrem.get("enabled") else 0
     return int(min(n_modes, session.NImg)) if n_modes >= 1 else 0
@@ -492,7 +502,7 @@ def postprocess_folder(folder, camera, settings=None, export_folder=None, index=
     settings (piv.Camera: width, horizontal and vertical offsets of the field of view, frame rate) and the recipe (PostSettings; the
     defaults of the interface if None): the figures of the recipe exported (the instantaneous ones of the map
     index), with the key numbers (metrics.json) and the recipe (postprocessing.json), to its subfolder
-    PostProcessing (PostProcessing_PTV for the results of a PTV; or export_folder), named after the project (name; the name of the folder by default), as the
+    PostProcessing/[pipeline] (PostProcessing/PaIRS, PostProcessing/TracTrac; or export_folder), named after the project (name; the name of the folder by default), as the
     interface exports them; figures, maps, videos, fps, video_format: the figures exported, the maps of the
     instantaneous ones and their videos ("gif" by default, or "mp4"; PostProcessing.export; index and maps: negative
     from the end, -1 the last map). maps_folder: the folder of vectors.npz (the subfolder PIV by default);

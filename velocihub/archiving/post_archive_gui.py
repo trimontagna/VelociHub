@@ -32,7 +32,8 @@ from velocihub.gui.postprocessing_page import (CORE_MODE_HELP, L_REF_HELP, REFER
 from velocihub.settings import export_choice, export_maps
 from velocihub.gui.widgets import HelpDot, PathBox
 from velocihub.prefs import getpref, setpref
-from velocihub.postprocessing import CORE_MODES, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES
+from velocihub.jet import CORE_MODES
+from velocihub.postprocessing import FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES
 
 # The folder of the package velocihub (where python -m finds it when it isn't installed)
 PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
