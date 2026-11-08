@@ -33,7 +33,8 @@ from .. import piv
 from ..batch import valid_percent
 from ..fields import MATH_FONT, load_vectors, nanmedian
 from ..piv.particles import DEFAULT_DIAMETER, DEFAULT_SNR, MIN_PARTICLES, count_particles
-from ..preprocessing import describe_images, folder_images, imread, imwrite, num2str, rasterize_masks, same_path
+from ..preprocessing import (describe_images, folder_images, imread, imwrite, num2str, rasterize_masks, same_path,
+                             title_lines)
 from ..project import format_duration, piv_results, run_time, valid_text
 from .batch_dialog import BatchStep, Field, PanelForm, PanelPage, run_batch
 from .widgets import FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, SidePanel
@@ -1131,7 +1132,7 @@ class PIVPage(Page):
             ax.set_xlabel(AXIS_LABELS[0])
             ax.set_ylabel(AXIS_LABELS[1])
             title = f"{heading}, displacement ${symbol}$ ({method} {data['what']}: {count})"
-            ax.set_title(title + (f"\n{detail}" if detail else ""), fontsize="medium", wrap=True)
+            ax.set_title(title_lines(title + (f"\n{detail}" if detail else "")), fontsize="medium")
             fig.colorbar(drawn, ax=ax, label=f"${symbol}$ (px)")
         panel.ax, panel.im, panel.cbar, panel.before, panel.divider = ax, None, None, None, []
         self.restore_limits(limits)

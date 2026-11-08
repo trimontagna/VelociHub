@@ -519,6 +519,15 @@ def draw_temporal_coefficient(ax, psi, mode):
     ax.set_ylabel(rf"$\psi_{{{mode}}}(k)$ (unit norm)")
 
 
+def title_lines(text, width=110):
+    """A title in lines of at most width characters (its own lines kept, the longer ones broken at the spaces). The
+    titles aren't wrapped by Matplotlib (wrap=True): its wrapping depends on where the title is during the layout, which
+    can make the constrained layout reserve a tall band for it and shrink the axes (adding a colour bar, for example)."""
+    import textwrap
+    return "\n".join(part for line in str(text).split("\n")
+                     for part in (textwrap.wrap(line, width, break_long_words=False) or [""]))
+
+
 def draw_image(fig, img, cmap="gray", clim=None, title="", clabel=None):
     """MATLAB imagesc(img); axis ij equal tight; colorbar: the pixel centers have integer coordinates from 1.
     Returns the axes."""
@@ -527,7 +536,7 @@ def draw_image(fig, img, cmap="gray", clim=None, title="", clabel=None):
     ax = fig.add_subplot()
     im = ax.imshow(img, cmap=cmap, extent=(0.5, W + 0.5, H + 0.5, 0.5),
                    vmin=None if clim is None else clim[0], vmax=None if clim is None else clim[1])
-    ax.set_title(title, fontsize="medium", wrap=True)
+    ax.set_title(title_lines(title), fontsize="medium")
     ax.set_xlabel("x (px)")
     ax.set_ylabel("y (px)")
     if clabel is not None:

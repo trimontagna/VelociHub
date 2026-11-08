@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.transforms import blended_transform_factory
 
-from ..preprocessing import Stopped, as2d, same_path
+from ..preprocessing import Stopped, as2d, same_path, title_lines
 from ..settings import (COLORMAPS)
 
 
@@ -420,7 +420,8 @@ class FigurePanel(ttk.Frame):
         self.im = self.ax.imshow(img, cmap=cmap, vmin=clim[0], vmax=clim[1], extent=(0.5, W + 0.5, H + 0.5, 0.5))
         # The masks drawn over the image don't change its limits
         self.ax.set_autoscale_on(False)
-        self.ax.set_title(title, fontsize="medium", wrap=True)
+        # Broken into lines here: Matplotlib's wrapping shrinks the axes when a colour bar is added (title_lines)
+        self.ax.set_title(title_lines(title), fontsize="medium")
         self.ax.set_xlabel(self.axis_labels[0])
         self.ax.set_ylabel(self.axis_labels[1])
         self.cbar = self.fig.colorbar(self.im, ax=self.ax, label=self.clabel) if colorbar else None
@@ -438,7 +439,7 @@ class FigurePanel(ttk.Frame):
             clim = (np.nanmin(img), np.nanmax(img))
         self.im.set_data(img)
         self.im.set_clim(*clim)
-        self.ax.set_title(title, fontsize="medium", wrap=True)
+        self.ax.set_title(title_lines(title), fontsize="medium")
         self.canvas.draw_idle()
         return clim
 

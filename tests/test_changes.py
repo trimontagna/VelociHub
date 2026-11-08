@@ -391,3 +391,26 @@ def test_planar_dissipation_and_ke_scales(measurements):
     assert sensor.ke_scales() == (None, None) and "physical" in sensor.plot("ke_length", Figure()).texts[0].get_text()
     with pytest.raises(ValueError):
         PostSettings(nu=0)
+
+
+def test_colour_bar_keeps_the_image_size():
+    """A colour bar added to an image with a long title (the Colormap button of the page Velocimetry): the image keeps
+    its size. Matplotlib's wrapping of the title (wrap=True) made the constrained layout shrink it; the titles are
+    broken into lines (title_lines) instead."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from velocihub.preprocessing import title_lines
+    title = ("Pair 150 of 15369: images 150 and 151 (original image)\nframe_000149.png\n"
+             "No displacements for this pair yet: Run the PIV/PTV (F5) or Run on the pair shown (F6)")
+    assert title_lines(title) == title and max(len(line) for line in title_lines("word " * 80).split("\n")) <= 110
+    for size in ((17.4, 9.0), (12, 6)):
+        fig = Figure(figsize=size, dpi=100, layout="compressed")
+        FigureCanvasAgg(fig)
+        ax = fig.add_subplot()
+        im = ax.imshow(np.zeros((720, 1280)), extent=(0.5, 1280.5, 720.5, 0.5))
+        ax.set_title(title_lines(title), fontsize="medium")
+        fig.canvas.draw()
+        before = ax.get_window_extent().width
+        fig.colorbar(im, ax=ax, label="Intensity (grey levels)")
+        fig.canvas.draw()
+        assert abs(ax.get_window_extent().width - before) < 2, size
