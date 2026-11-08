@@ -5,7 +5,8 @@ from the sections of a project file (VelociHub_project.json):
   "export_folder"} (preprocessing_from_project, preprocessing_to_project, validate_preprocessing);
 - PIV/PTV: {"engine", "options", "settings", "engine_settings", "regression", "output_folder"} (piv_from_project,
   piv_to_project, validate_piv);
-- post-processing: {"results": "PIV" or "PTV", "settings": PostSettings as a dictionary, "space": "physical" or
+- post-processing: {"results": the results sets exported (pipelines.py: ["PaIRS", "TracTrac"...], the same export
+  for each), "settings": PostSettings as a dictionary, "space": "physical" or
   "sensor", "camera", "export_folder", "export": export specification} (post_from_project, post_to_project,
   validate_post), the export specification (export_spec: the figures, maps and videos chosen in the window Quantities,
   and the parameters of the figures) and the options of PostProcessing.export it gives (export_options).
@@ -15,14 +16,14 @@ functions.
 """
 
 import copy
-import os
 from dataclasses import asdict, fields as dataclass_fields
 
 from . import piv
 from .batch import masks_from_file
 from .fields import VIDEO_FORMAT, VIDEO_FORMATS, VIDEO_FPS, num2str
+from .pipelines import DEFAULT_PIPELINE, pipeline_of_folder, results_sets
 from .postprocessing import FIGURE_TITLES, MAP_FIGURES, PostSettings
-from .preprocessing import ContrastSettings, str2double
+from .preprocessing import EXPORT_FORMATS, ContrastSettings, str2double
 from .prefs import getpref
 
 
@@ -34,7 +35,7 @@ COLORMAPS = ("viridis", "magma", "inferno", "plasma", "cividis", "RdBu_r", "cool
 def preprocessing_to_project(section, settings):
     """The section preprocessing of a project file with the batch settings of the pre-processing (the rest kept:
     the spectrum and the modes saved, the last export, the automatic threshold)."""
-    out = {**section, **{k: settings[k] for k in ("masks", "contrast", "export_folder", "masks_file")
+    out = {**section, **{k: settings[k] for k in ("masks", "contrast", "export_folder", "export_format", "masks_file")
                          if k in settings}}
     # The masks of the file: those of the project (the interface shows them)
     if settings.get("masks_file"):
@@ -50,7 +51,7 @@ def preprocessing_to_project(section, settings):
 def preprocessing_from_project(section):
     """The batch settings of the pre-processing of the section preprocessing of a project file."""
     return {k: copy.deepcopy(section[k]) for k in ("masks", "contrast", "background_removal", "export_folder",
-                                                    "masks_file") if k in section}
+                                                    "export_format", "masks_file") if k in section}
 
 
 def validate_preprocessing(section):
@@ -62,6 +63,8 @@ def validate_preprocessing(section):
     known = {f.name for f in dataclass_fields(ContrastSettings)}
     contrast = {k: v for k, v in (section.get("contrast") or {}).items() if k in known}
     ContrastSettings(**{**contrast, "filters": tuple(contrast.get("filters") or ())})
+    if section.get("export_format") not in (None, *EXPORT_FORMATS):
+        raise ValueError(f"Format of the images exported: one of {', '.join(EXPORT_FORMATS)}")
     bgrem = section.get("background_removal") or {}
     if bgrem.get("enabled") and not str2double(bgrem.get("modes_removed")) >= 1:
         raise ValueError("POD modes removed: at least 1 with the background removal")
@@ -272,32 +275,74 @@ def export_options(spec, n):
                 compares={k: (v, params["wipers"].get(k, COMPARE_FRACTION)) for k, v in params["compares"].items()})
 
 
-def results_method(section):
-    """The results post-processed of the section postprocessing of a project file: PTV if its maps folder is its
-    subfolder PTV, else PIV (the default: those of the PTV for a project without PIV results)."""
-    maps = section.get("maps_folder")
-    return "PTV" if isinstance(maps, str) and os.path.normpath(maps) == piv.PTV_FOLDER else "PIV"
+def results_pipeline(section):
+    """The pipeline of the results post-processed in the page of the section postprocessing of a project file: the one
+    whose results folder is its maps folder, else the default one (those of the first pipeline found for a project
+    without its results: pipelines.chosen_results)."""
+    return pipeline_of_folder(section.get("maps_folder")) or DEFAULT_PIPELINE
+
+
+# The camera of the batch settings and of the API ({key: value}, the keys of piv.Camera), and as the side panel of
+# the post-processing keeps it in the project file ({key: text}): the keys of both, their defaults
+CAMERA_KEYS = {"fov_width_mm": "fov_width", "fov_height_mm": "fov_height", "x_offset_mm": "x_offset",
+               "y_offset_mm": "y_offset", "x_shift": "x_shift", "y_shift": "y_shift", "frame_rate_hz": "frame_rate"}
+CAMERA_DEFAULTS = {"fov_height_mm": None, "x_offset_mm": 0.0, "y_offset_mm": 0.0, "x_shift": 0.0, "y_shift": 0.0,
+                   "frame_rate_hz": piv.DEFAULT_FRAME_RATE}
+
+
+def camera_of(camera):
+    """The piv.Camera of a camera of the batch settings (CAMERA_KEYS; missing: CAMERA_DEFAULTS): ValueError if it is
+    invalid."""
+    values = {**CAMERA_DEFAULTS, **{k: v for k, v in camera.items() if k in CAMERA_KEYS}}
+    return piv.Camera(**values)
+
+
+def camera_record(camera):
+    """A piv.Camera (or the camera of the batch settings) as the batch settings keep it: {key: value} of
+    CAMERA_KEYS."""
+    if isinstance(camera, piv.Camera):
+        camera = asdict(camera)
+    return {key: camera.get(key, CAMERA_DEFAULTS.get(key)) for key in CAMERA_KEYS}
+
+
+def camera_to_project(camera):
+    """A camera of the batch settings as the side panel keeps it in the project file ({key: text}, "" for none)."""
+    camera = camera_record(camera)
+    return {text: ("" if camera.get(key) is None else num2str(camera[key])) for key, text in CAMERA_KEYS.items()}
+
+
+def camera_from_project(saved):
+    """The camera of the batch settings of a camera of the project file (camera_to_project), None without the width
+    of the field of view (or if it is invalid). A camera saved by the previous versions, without the shifts of the
+    axes, had y = 0 at the middle of the height of the images: y_shift 0.5."""
+    saved = saved or {}
+    try:
+        camera = {"fov_width_mm": float(saved["fov_width"])}
+        for key, text in CAMERA_KEYS.items():
+            if key != "fov_width_mm" and str(saved.get(text) or "").strip():
+                camera[key] = float(saved[text])
+        if "y_shift" not in saved:
+            camera["y_shift"] = 0.5
+        return camera_record(camera_of(camera))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def post_to_project(section, settings):
     """The section postprocessing of a project file with the batch settings of the post-processing: the recipe,
-    the results post-processed (the maps folder: the subfolder PTV, or the default one for PIV), the scale space,
+    the results sets exported by the batch (results_sets; the vector fields of the page, its maps folder, kept), the
+    scale space,
     the camera (as the side panel keeps it), the export folder and the quantities exported (the rest kept: the
     tiles, another maps folder, the last export)."""
     out = dict(section)
-    if settings.get("results") == "PTV":
-        out["maps_folder"] = piv.PTV_FOLDER
-    elif settings.get("results") == "PIV" and results_method(out) == "PTV":
-        out["maps_folder"] = None
+    if settings.get("results") is not None:
+        out["results_sets"] = results_sets(settings["results"])
     if settings.get("settings") is not None:
         out["settings"] = settings["settings"]
     if settings.get("space"):
         out["space"] = settings["space"]
     camera = settings.get("camera")
-    out["camera"] = ({"fov_width": num2str(camera["fov_width_mm"]), "x_offset": num2str(camera["x_offset_mm"]),
-                      "y_offset": num2str(camera.get("y_offset_mm") or 0),
-                      "frame_rate": num2str(camera["frame_rate_hz"])} if camera
-                     else {**(out.get("camera") or {}), "fov_width": ""})
+    out["camera"] = (camera_to_project(camera) if camera else {**(out.get("camera") or {}), "fov_width": ""})
     if "export_folder" in settings:
         out["export_folder"] = settings["export_folder"]
     spec = settings.get("export")
@@ -310,15 +355,9 @@ def post_to_project(section, settings):
 def post_from_project(section):
     """The batch settings of the post-processing of the section postprocessing of a project file: the results
     post-processed, the recipe, the scale space, the camera, the export folder and the quantities exported."""
-    camera = section.get("camera") or {}
-    try:
-        camera = {"fov_width_mm": float(camera["fov_width"]), "x_offset_mm": float(camera.get("x_offset") or 0),
-                  "y_offset_mm": float(camera.get("y_offset") or 0),
-                  "frame_rate_hz": float(camera.get("frame_rate") or piv.PRESET_FRAME_RATE)}
-    except (KeyError, TypeError, ValueError):
-        camera = None
+    camera = camera_from_project(section.get("camera"))
     params = section.get("figure_params") if "figure_params" in section else figure_params_from_tiles(section)
-    return {"results": results_method(section), "settings": section.get("settings") or settings_record(PostSettings()),
+    return {"results": results_sets(section.get("results_sets")), "settings": section.get("settings") or settings_record(PostSettings()),
             "space": section.get("space") or "physical", "camera": camera,
             "export_folder": section.get("export_folder"),
             "export": {"choice": section.get("export_choice"), "params": params,
@@ -329,17 +368,17 @@ def validate_post(settings):
     """Batch settings of the post-processing checked (the recipe: PostSettings): ValueError with a message. The
     camera without the width of the field of view: none; the export specification completed."""
     settings_from_record(settings.get("settings") or {})
+    # The results sets (a pipeline alone, or the methods PIV, PTV of the previous versions: theirs; none: all)
+    settings["results"] = results_sets(settings.get("results"))
     settings["export"] = export_spec(settings.get("export"))
     camera = settings.get("camera")
     if isinstance(camera, dict):
         if camera.get("fov_width_mm") is None:
             settings["camera"] = None
         else:
-            camera.setdefault("x_offset_mm", 0.0)
-            camera.setdefault("y_offset_mm", 0.0)
-            camera.setdefault("frame_rate_hz", piv.PRESET_FRAME_RATE)
-            piv.Camera(float(camera["fov_width_mm"]), float(camera["x_offset_mm"]), float(camera["frame_rate_hz"]),
-                       y_offset_mm=float(camera["y_offset_mm"]))
+            for key, value in CAMERA_DEFAULTS.items():
+                camera.setdefault(key, value)
+            camera_of(camera)  # Checked
     return settings
 
 

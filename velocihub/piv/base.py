@@ -3,8 +3,8 @@
 A PIV software is an engine (PIVEngine) that computes the displacement of the image pairs in pixels. The engines are
 registered in ENGINES: PaIRS-UniNa (pairs_engine.py) is the first one, TracTrac (ptv_engine.py: particle tracking,
 binned on the grid) the second; another software is added with a subclass of PIVEngine. The camera settings (Camera: width of the field of view, frame rate...) convert the pixels into mm and
-m/s: the post-processing does it (postprocessing.load_vectors), the scale being the width of the field of view
-divided by the width of the images.
+m/s: the post-processing does it (postprocessing.load_vectors), the pixel pitches being the width (height) of the
+field of view divided by the width (height) of the images.
 
 Results, in the folder of the PIV (subfolder PIV of the image folder by default, PTV for TracTrac):
     vectors.npz      all the vector fields: x_px, y_px (positions, px from the top-left corner of the image),
@@ -12,8 +12,8 @@ Results, in the folder of the PIV (subfolder PIV of the image folder by default,
                      ptv_particles: the particles of each cell), info (engine: 1 = valid),
                      status (per grid point: 0 = flow, 1 = no particles, 2 = masked) and settings (JSON text, with
                      the pairs and the size of the images), read by the post-processing; with a camera (Camera),
-                     also x_mm, y_mm, x_global_mm (y upwards from the middle of the height of the images, where the
-                     jet is), U, V (m/s) and t_s (time of the first image of each pair); with a regression
+                     also x_mm, y_mm, x_global_mm (from the origin of the axes of the camera, Camera.x_shift and
+                     y_shift, y upwards), U, V (m/s) and t_s (time of the first image of each pair); with a regression
                      (regression.py), u_px, v_px and info are those of the regression, and raw_u_px, raw_v_px,
                      raw_info those of the PIV, with regression_residual_px and regression_n_rbf per map
     settings.json    every setting used, and the run time (run_time_s, run_time, seconds_per_pair, resumed_pairs)
@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
+from dataclasses import fields as dataclass_fields
 
 import numpy as np
 from PIL import Image
@@ -37,12 +38,8 @@ from PIL import Image
 from ..fields import PIV_FOLDER, TRACKS_FILE, VECTORS_FILE
 from ..project import clean_name, comparable_recipe, default_project_name, format_duration, relative
 
-# Fields of view of the jet measurements (camera at 150 Hz): size, and axial offset of their left edge from the one
-# of FOV 1 (12 cm between the fields of view). Reminders: the values are entered by the user.
-FOV_PRESETS = {1: dict(width_mm=196.1, height_mm=122.6, x_offset_mm=0.0),
-               2: dict(width_mm=196.5, height_mm=122.8, x_offset_mm=120.0),
-               3: dict(width_mm=196.3, height_mm=122.7, x_offset_mm=240.0)}
-PRESET_FRAME_RATE = 150.0
+# Frame rate of the camera when none is given (Hz): the times are then in frames
+DEFAULT_FRAME_RATE = 1.0
 # Pairs saved together while they are computed: the computation stopped continues from the last chunk saved
 CHUNK = 100
 # Vectors of a grid point valid in less than this fraction of the pairs: no particles there
@@ -55,13 +52,6 @@ def num2str(x):
     return str(int(x)) if float(x).is_integer() else f"{x:.6g}"
 
 
-def fov_help():
-    """Reminder of the fields of view of the jet measurements, shown next to the camera settings."""
-    lines = [f"FOV {k}: {v['width_mm']} x {v['height_mm']} mm, horiz. offset {num2str(v['x_offset_mm'])} mm"
-             for k, v in FOV_PRESETS.items()]
-    return f"Jet measurements ({num2str(PRESET_FRAME_RATE)} Hz):\n" + "\n".join(lines)
-
-
 ################################################################################
 # Camera and pairs
 
@@ -70,34 +60,59 @@ def fov_help():
 class Camera:
     """Camera and acquisition settings.
 
-    fov_width_mm: width of the field of view, the one of the images (the scale is fov_width_mm divided by the width
-    of the images in pixels);
-    x_offset_mm: horizontal offset, the position of the left edge of the field of view along x (x_global = x +
-    x_offset_mm);
-    frame_rate_hz: frame rate of the camera;
+    fov_width_mm: width of the field of view, the one of the images: the horizontal pixel pitch (mm/px) is
+    fov_width_mm divided by the width of the images in pixels;
+    x_offset_mm: horizontal offset, the position of the origin of x in the global axes (x_global = x + x_offset_mm,
+    the stitching of fields of view);
+    frame_rate_hz: frame rate of the camera (DEFAULT_FRAME_RATE: 1 Hz, the times in frames);
     frame_step: the images k and k + frame_step form a pair, separated by dt = frame_step / frame_rate_hz;
     pair_step: the first images of the pairs are 1, 1 + pair_step, 1 + 2 pair_step... (1: every image);
-    y_offset_mm: vertical offset, the position of the middle of the height of the field of view along y (y_global =
-    y + y_offset_mm, y = 0 at the middle of the images)."""
+    y_offset_mm: vertical offset, the position of the origin of y in the global axes (y_global = y + y_offset_mm);
+    fov_height_mm: height of the field of view: the vertical pixel pitch is fov_height_mm divided by the height of
+    the images in pixels (None: the horizontal pitch, square pixels);
+    x_shift, y_shift: the origin of the axes, from the bottom-left corner of the images, in fractions of the width
+    and of the height of the field of view: x = 0 at x_shift times the width from the left edge, y = 0 at y_shift
+    times the height from the bottom edge, y upwards (0, 0: the bottom-left corner; y_shift = 0.5: the middle of the
+    height, e.g. a jet centred in the images; 0.5, 0.5: the centre)."""
 
     fov_width_mm: float
     x_offset_mm: float = 0.0
-    frame_rate_hz: float = PRESET_FRAME_RATE
+    frame_rate_hz: float = DEFAULT_FRAME_RATE
     frame_step: int = 1
     pair_step: int = 1
     y_offset_mm: float = 0.0
+    fov_height_mm: float = None
+    x_shift: float = 0.0
+    y_shift: float = 0.0
 
     def __post_init__(self):
         self.fov_width_mm, self.x_offset_mm = float(self.fov_width_mm), float(self.x_offset_mm)
         self.frame_rate_hz, self.y_offset_mm = float(self.frame_rate_hz), float(self.y_offset_mm)
+        self.fov_height_mm = float(self.fov_height_mm) if self.fov_height_mm not in (None, "") else None
+        self.x_shift, self.y_shift = float(self.x_shift or 0), float(self.y_shift or 0)
         if not (self.fov_width_mm > 0 and self.frame_rate_hz > 0 and np.isfinite(self.x_offset_mm)
                 and np.isfinite(self.y_offset_mm)):
             raise ValueError("The width of the field of view and the frame rate must be positive")
+        if self.fov_height_mm is not None and not self.fov_height_mm > 0:
+            raise ValueError("The height of the field of view must be positive (empty: square pixels)")
+        if not (np.isfinite(self.x_shift) and np.isfinite(self.y_shift)):
+            raise ValueError("The shifts of the axes must be numbers (fractions of the field of view)")
         if float(self.frame_step) != int(self.frame_step) or float(self.pair_step) != int(self.pair_step):
             raise ValueError("The frame step and the pair step must be integers")
         self.frame_step, self.pair_step = int(self.frame_step), int(self.pair_step)
         if self.frame_step < 1 or self.pair_step < 1:
             raise ValueError("The frame step and the pair step must be at least 1")
+
+    @classmethod
+    def from_record(cls, record, **changes):
+        """The camera of a record (asdict of a Camera, as saved with the vector fields), the keys it doesn't know
+        ignored. A record of the previous versions, without y_shift, had y = 0 at the middle of the height of the
+        images: y_shift 0.5."""
+        names = {f.name for f in dataclass_fields(cls)}
+        values = {k: v for k, v in dict(record).items() if k in names}
+        values.setdefault("y_shift", 0.5)
+        values.update(changes)
+        return cls(**values)
 
     @property
     def dt(self):
@@ -105,9 +120,31 @@ class Camera:
         return self.frame_step / self.frame_rate_hz
 
     def scale(self, width_px):
-        """Size of a pixel in the flow (mm/px): the width of the field of view divided by the width of the images in
-        pixels."""
+        """Horizontal pixel pitch in the flow (mm/px): the width of the field of view divided by the width of the
+        images in pixels."""
         return self.fov_width_mm / width_px
+
+    def scale_y(self, width_px, height_px):
+        """Vertical pixel pitch in the flow (mm/px): the height of the field of view divided by the height of the
+        images in pixels, or the horizontal pitch without height (square pixels)."""
+        return self.fov_height_mm / height_px if self.fov_height_mm else self.scale(width_px)
+
+    def pitches(self, width_px, height_px):
+        """Horizontal and vertical pixel pitches (mm/px) of images of this size."""
+        return self.scale(width_px), self.scale_y(width_px, height_px)
+
+    def positions(self, x_px, y_px, width_px, height_px, offsets=True):
+        """Positions (mm) of points of images of this size given in pixels from their top-left corner: x to the right
+        and y upwards from the origin (x_shift, y_shift), plus the offsets of the field of view (offsets)."""
+        sx, sy = self.pitches(width_px, height_px)
+        x = (np.asarray(x_px, np.float64) - self.x_shift * width_px) * sx
+        y = ((1.0 - self.y_shift) * height_px - np.asarray(y_px, np.float64)) * sy
+        return (x + self.x_offset_mm, y + self.y_offset_mm) if offsets else (x, y)
+
+    def velocities(self, u_px, v_px, width_px, height_px):
+        """Velocities (m/s) of displacements (px per pair, v upwards) in images of this size."""
+        sx, sy = self.pitches(width_px, height_px)
+        return u_px * (sx / 1000.0 / self.dt), v_px * (sy / 1000.0 / self.dt)
 
     def pairs(self, n_images, n_pairs=None):
         """Pairs of images (0-based indices): (k, k + frame_step) for k = 0, pair_step, 2 pair_step... The first
@@ -115,10 +152,17 @@ class Camera:
         pairs = [(k, k + self.frame_step) for k in range(0, n_images - self.frame_step, self.pair_step)]
         return pairs if n_pairs is None else pairs[: int(n_pairs)]
 
-    def describe(self, width_px=None):
-        text = f"FOV {num2str(self.fov_width_mm)} mm wide"
+    def describe(self, width_px=None, height_px=None):
+        text = f"FOV {num2str(self.fov_width_mm)}"
+        text += f" x {num2str(self.fov_height_mm)} mm" if self.fov_height_mm else " mm wide"
         if width_px:
-            text += f" ({self.scale(width_px):.5f} mm/px)"
+            sx = self.scale(width_px)
+            if self.fov_height_mm and height_px:
+                text += f" ({sx:.5f} x {self.scale_y(width_px, height_px):.5f} mm/px)"
+            else:
+                text += f" ({sx:.5f} mm/px)"
+        if self.x_shift or self.y_shift:
+            text += f", origin at ({num2str(self.x_shift)}, {num2str(self.y_shift)}) of the field of view"
         return (text + f", horiz. offset {num2str(self.x_offset_mm)} mm"
                 + (f", vert. offset {num2str(self.y_offset_mm)} mm" if self.y_offset_mm else "")
                 + f", {num2str(self.frame_rate_hz)} Hz, "
@@ -298,6 +342,9 @@ class PIVEngine:
 
     key = ""
     name = ""
+    # The name of its pipeline (velocihub/pipelines.py): its results in the menus, its post-processing exported to
+    # PostProcessing/[label]
+    label = ""
     description = ""
     parameters = ()
     results_folder = PIV_FOLDER
@@ -335,6 +382,7 @@ DEFAULT_ENGINE = "pairs"
 
 def register(cls):
     """Class decorator: makes a PIV engine available (in the interface and get_engine)."""
+    cls.label = cls.label or cls.name
     ENGINES[cls.key] = cls
     return cls
 
@@ -583,12 +631,13 @@ class PIVRun:
             arrays["ptv_particles"] = count
         camera = self.camera
         if camera is not None:
-            scale, dt = camera.scale(self.width), camera.dt
-            # y = 0 at the middle of the height of the images: the jet is centred in them
-            x_mm, y_mm = xpx * scale, (self.height / 2 - ypx) * scale
-            arrays.update(x_mm=x_mm, y_mm=y_mm, x_global_mm=x_mm + camera.x_offset_mm, U=u * scale / 1000.0 / dt,
-                          V=-v * scale / 1000.0 / dt, t_s=np.array([a for a, _ in pairs]) / camera.frame_rate_hz)
-            settings.update(camera=asdict(camera), scale_mm_per_px=scale, dt_s=dt)
+            # From the origin of the axes (Camera.x_shift, y_shift), y upwards
+            x_mm, y_mm = camera.positions(xpx, ypx, self.width, self.height, offsets=False)
+            U, V = camera.velocities(u, -v, self.width, self.height)
+            arrays.update(x_mm=x_mm, y_mm=y_mm + camera.y_offset_mm, x_global_mm=x_mm + camera.x_offset_mm, U=U, V=V,
+                          t_s=np.array([a for a, _ in pairs]) / camera.frame_rate_hz)
+            settings.update(camera=asdict(camera), scale_mm_per_px=camera.scale(self.width),
+                            scale_y_mm_per_px=camera.scale_y(self.width, self.height), dt_s=camera.dt)
         return arrays, settings
 
 

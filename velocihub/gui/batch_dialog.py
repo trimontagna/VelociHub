@@ -6,8 +6,9 @@ those of the interface). The settings are changed as differences: with a project
 with a folder selected, that setting for all the projects below it (each keeps its other settings). The form shows
 the settings of the node selected (of its first project for a folder; in bold with a button ↺: those that differ
 between its projects, ↺ giving them all the value shown), the panels (the quantities of the post-processing) too.
-Reset gives the projects of the node the settings of the project open. The column Differences compares each project
-with the project open. The options of the run (archive file, stitch matching) are in their own box.
+The project open is the reference of all the nodes: the names of the projects whose settings differ from its own are
+in bold (the folders with such projects too), with ↺ in their column, which gives them its settings; the menu of a
+stitched project gives it the settings of its stitch reference. The options of the run (archive file, stitch matching) are in their own box.
 
 The settings changed are saved soon in the project files (the section of the step: to_project), so that a project
 opened shows them; the project open takes them in its page when the window closes or runs. The archive keeps its
@@ -37,13 +38,32 @@ from .widgets import Dialog, HelpDot, PathBox, RangeSlider
 GREY, LOST = "#9a9a9a", "#c62828"
 
 
+def bold_text(text):
+    """A text in bold letters (Unicode mathematical sans-serif bold: the letters and the digits; the other characters
+    as they are), for a name in a tree whose other columns stay in the normal font (Tk 8.6 sets the font of a whole
+    row)."""
+    out = []
+    for c in text:
+        if "A" <= c <= "Z":
+            out.append(chr(0x1D5D4 + ord(c) - 65))
+        elif "a" <= c <= "z":
+            out.append(chr(0x1D5EE + ord(c) - 97))
+        elif "0" <= c <= "9":
+            out.append(chr(0x1D7EC + ord(c) - 48))
+        else:
+            out.append(c)
+    return "".join(out)
+
+
 def cap(text):
     """A text as shown in the boxes, the columns and the buttons: its first letter in capital."""
     return text[:1].upper() + text[1:] if text else text
 HELP = ("Check the projects to run; checking a folder checks everything below it. Select a project to edit its "
         "settings, or a folder to set one setting for all the projects below it. Bold settings differ between "
-        "those projects; ↺ gives them all the value shown. Reset copies the settings of the open project to the "
-        "node. Greyed projects can't be run by this step; red ones weren't found.")
+        "those projects; ↺ gives them all the value shown. Bold projects have settings that differ from those of the "
+        "open project (the reference of all of them): ↺ in their row gives them its settings; right-click a stitched "
+        "project for the settings of its stitch reference. "
+        "Greyed projects can't be run by this step; red ones weren't found.")
 
 
 @dataclass
@@ -91,7 +111,7 @@ class NodeFolderBox(PathBox):
     "..."; "↺": the default one."""
 
     def __init__(self, master, title, chosen, base):
-        super().__init__(master, title, chosen, width=16)
+        super().__init__(master, title, chosen, width=8)
         self.base = base
 
     def path_shown(self):
@@ -113,7 +133,7 @@ class NodeFileBox(PathBox):
     emptied (none: chosen(None))."""
 
     def __init__(self, master, title, chosen, filetypes):
-        super().__init__(master, title, chosen, reset=False, width=16)
+        super().__init__(master, title, chosen, reset=False, width=8)
         self.filetypes = filetypes
 
     def browse(self):
@@ -187,6 +207,12 @@ class SettingsForm(ttk.Frame):
                                                                         sticky=tk.W, pady=(6, 0))
                 cell.grid(row=2 * r + 1, column=0, columnspan=2, sticky=tk.W, padx=(12, 0))
                 self.add_choices(cell, field, value, field_state, (differ_choices or {}).get(field.path, set()))
+            elif field.kind in ("folder", "file"):
+                # A path below its label, as wide as the form (its buttons don't widen it)
+                label = ttk.Label(self.inner, text=field.label, font=font)
+                label.grid(row=2 * r, column=0, columnspan=2, sticky=tk.W, pady=(6, 0))
+                cell.grid(row=2 * r + 1, column=0, columnspan=4, sticky="ew", pady=(1, 2))
+                self.add_entry(cell, field, value, field_state)
             else:
                 label = ttk.Label(self.inner, text=field.label, wraplength=200, font=font)
                 if reason:
@@ -230,14 +256,14 @@ class SettingsForm(ttk.Frame):
         if field.kind == "file":
             box = NodeFileBox(cell, field.label, lambda path: self.changed_callback(field, path), field.choices)
             box.show(value or "", enabled=state == ["!disabled"])
-            box.pack(side=tk.LEFT)
+            box.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.widgets.append(box.entry)
             self.pending.append(box.entered)
             return
         if field.kind == "folder":
             box = NodeFolderBox(cell, field.label, lambda folder: self.changed(field, folder), self.base)
             box.show(value or field.default or "", enabled=state == ["!disabled"])
-            box.pack(side=tk.LEFT)
+            box.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.widgets.append(box.entry)
             self.pending.append(box.entered)
             return
@@ -422,6 +448,9 @@ class PanelForm(ttk.Frame):
         self.fields = {f.path: f for f in fields if self.in_panel(f)}
         self.extra.show([f for f in fields if not self.in_panel(f)], settings, enabled, base, differs, differ_choices,
                         unavailable, limits)
+        # The form above the panel as high as its fields (the results sets, the export folder), scrolled beyond
+        self.extra.inner.update_idletasks()
+        self.extra.canvas.configure(height=min(max(self.extra.inner.winfo_reqheight(), 20), 150))
         self.shown, self.enabled = copy.deepcopy(settings), enabled
         self.differs = {f.path for f in self.fields.values()
                         if any(d[:len(p)] == p for d in differs for p in (f.path, f.end) if p)}
@@ -634,7 +663,7 @@ class BatchDialog(Dialog):
         self.resizable(True, True)
         self.unbind("<Return>")  # Enter doesn't run the batch
         self.app, self.step, self.ws = app, step, app.workspace.ws
-        self.items = {}
+        self.items, self.names = {}, {}  # The nodes of the tree, their names (plain text)
         self.checked = {key(f) for f in self.ws.checked.get(step.job, [])}
         # The settings of the projects (by folder), those changed to be saved (soon: sync_job, or when the window
         # closes), the settings shown for the node selected, the project open changed (its page at the end)
@@ -655,17 +684,19 @@ class BatchDialog(Dialog):
         self.extra = getattr(step.options, "column", None)
         if hasattr(step.options, "attach"):
             step.options.attach(self)
-        self.tree = ttk.Treeview(body, columns=("run", "extra", "settings") if self.extra else ("run", "settings"),
+        # The columns: Run, the options (if any) and ↺ (the settings of the project open, for those that differ)
+        self.tree = ttk.Treeview(body, columns=("run", "extra", "reset") if self.extra else ("run", "reset"),
                                  height=24, selectmode="browse")
         self.tree.heading("#0", text="Project", anchor=tk.W)
         self.tree.heading("run", text="Run")
         if self.extra:
             self.tree.heading("extra", text=self.extra)
-            self.tree.column("extra", width=getattr(step.options, "column_width", 72))
-        self.tree.heading("settings", text="Differences vs. Open Project", anchor=tk.W)
-        self.tree.column("#0", width=150 if self.extra else 170)
-        self.tree.column("run", width=44, anchor=tk.CENTER, stretch=False)
-        self.tree.column("settings", width=170)
+            self.tree.column("extra", width=getattr(step.options, "column_width", 72), stretch=False,
+                             anchor=tk.CENTER)
+        self.tree.heading("reset", text="↺")
+        self.tree.column("#0", width=150, minwidth=100)
+        self.tree.column("run", width=36, anchor=tk.CENTER, stretch=False)
+        self.tree.column("reset", width=26, anchor=tk.CENTER, stretch=False)
         # The columns: the tree, the options (if any), the node selected with its settings, the panels
         columns = ttk.PanedWindow(body, orient=tk.HORIZONTAL)
         columns.pack(fill=tk.BOTH, expand=True)
@@ -675,6 +706,13 @@ class BatchDialog(Dialog):
         columns.add(tree_column, weight=2)
         cell = ttk.Frame(tree_column)
         tree_column.add(cell, weight=3)
+        # Check all and Uncheck all right below the tree, with the summary
+        row = ttk.Frame(cell)
+        row.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
+        ttk.Button(row, text="Check all", command=lambda: self.check_all(True)).pack(side=tk.LEFT)
+        ttk.Button(row, text="Uncheck all", command=lambda: self.check_all(False)).pack(side=tk.LEFT, padx=(6, 0))
+        self.summary = ttk.Label(row, foreground="#555555")
+        self.summary.pack(side=tk.LEFT, padx=(8, 0))
         self.tree.pack(in_=cell, side=tk.LEFT, fill=tk.BOTH, expand=True)
         bar = ttk.Scrollbar(cell, command=self.tree.yview)
         self.tree.configure(yscrollcommand=bar.set)
@@ -685,8 +723,7 @@ class BatchDialog(Dialog):
         self.tree.bind("<Button-1>", self.click, add="+")
         self.tree.bind("<Control-Button-1>", self.ctrl_click)
         # The menu of a node: options.context_items(dialog, iid): [(label, command or None: greyed)]
-        if hasattr(step.options, "context_items"):
-            self.tree.bind("<Button-3>", self.context_menu)
+        self.tree.bind("<Button-3>", self.context_menu)
         # The text of the column of the options in full while the mouse is over it (it may be cut)
         self.cell_tip, self.cell_tip_at = None, None
         if self.extra:
@@ -697,7 +734,7 @@ class BatchDialog(Dialog):
         # The node settings, the common options of the run below them (a split moved to share the height)
         node_column = ttk.PanedWindow(columns, orient=tk.VERTICAL)
         columns.add(node_column, weight=1)
-        tab = ttk.LabelFrame(node_column, text="Node settings", padding=8)
+        self.node_tab = tab = ttk.LabelFrame(node_column, text="Settings", padding=6)
         node_column.add(tab, weight=3)
         self.build_node_pane(tab)
         if step.options is not None:
@@ -720,24 +757,18 @@ class BatchDialog(Dialog):
                 panel_key, value, replace))
             widget.pack(fill=tk.BOTH, expand=True)
             self.panels.append((panel_key, widget))
-        width = 560 + 420 + 780 * bool(step.panels)
-        self.geometry(f"{min(width, self.winfo_screenwidth() - 40)}x{min(880, self.winfo_screenheight() - 80)}")
         buttons = ttk.Frame(frame)
-        buttons.pack(side=tk.BOTTOM, anchor=tk.E, pady=(10, 0))
-        row = ttk.Frame(frame)
-        row.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
-        body.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
-        ttk.Button(row, text="Check all", command=lambda: self.check_all(True)).pack(side=tk.LEFT)
-        ttk.Button(row, text="Uncheck all", command=lambda: self.check_all(False)).pack(side=tk.LEFT, padx=(6, 0))
-        self.reset_all_button = ttk.Button(row, text="Reset all to the open project", command=self.reset_all)
-        self.reset_all_button.pack(side=tk.LEFT, padx=(18, 0))
-        self.summary = ttk.Label(row, foreground="#555555")
-        self.summary.pack(side=tk.LEFT, padx=(12, 0))
+        buttons.pack(side=tk.BOTTOM, anchor=tk.E, pady=(8, 0))
+        body.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         ttk.Button(buttons, text="Run", command=self.ok).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(buttons, text="Close", command=self.close).pack(side=tk.LEFT)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Escape>", lambda event: self.close())  # The settings saved, as with Close
         self.fill()
+        # As wide as its columns ask, narrow enough for a 16:9 screen (1280 px wide at 150 % scaling)
+        self.update_idletasks()
+        width = min(max(self.winfo_reqwidth(), 700), 1240, self.winfo_screenwidth() - 40)
+        self.geometry(f"{width}x{min(860, self.winfo_screenheight() - 80)}")
 
     # ------------------------------------------------------------------ tree
 
@@ -749,7 +780,8 @@ class BatchDialog(Dialog):
         """The tree of the workspace: roots, folders, projects."""
         for r in self.ws.roots:
             iid = self.node_id(r["folder"])
-            self.tree.insert("", tk.END, iid=iid, text=os.path.basename(r["folder"]) or r["folder"], open=True)
+            self.names[iid] = os.path.basename(r["folder"]) or r["folder"]
+            self.tree.insert("", tk.END, iid=iid, text=self.names[iid], open=True)
             self.items[iid] = ("root", r["folder"], "")
         for p in self.ws.projects:
             parent = self.node_id(p.root)
@@ -760,10 +792,12 @@ class BatchDialog(Dialog):
                 path = "/".join(parts[:i + 1])
                 iid = self.node_id(p.root, path)
                 if not self.tree.exists(iid):
+                    self.names[iid] = parts[i]
                     self.tree.insert(parent, tk.END, iid=iid, text=parts[i], open=True)
                     self.items[iid] = ("node", p.root, path)
                 parent = iid
             iid = "project|" + key(p.folder)
+            self.names[iid] = p.label()
             self.tree.insert(parent, tk.END, iid=iid, text=p.label())
             self.items[iid] = ("project", p.root, p.path, p)
         self.refresh()
@@ -829,27 +863,21 @@ class BatchDialog(Dialog):
         self.reference_flat = None
         self.changed(new)
 
-    def differences(self, iid):
-        """The column of a node: how its settings differ from those of the project open (the settings of each
-        project only left out: its export path)."""
-        projects = self.targets(iid)
-        if not projects:
-            return ""
+    def differing(self, iid):
+        """The projects of a node whose settings differ from those of the project open (the reference of all the
+        nodes; the settings of each project only left out: its export path)."""
         reference = self.compared_reference()
-        item = self.items[iid]
-        if item[0] == "project":
-            if self.is_open(item[3]):
-                return "Open project"
-            settings = self.compared_of(item[3])
-            n = sum(settings.get(path, MISSING) != v for path, v in reference.items())
-            n += sum(path not in reference for path in settings)
-            return "None" if not n else f"{n} setting{'s differ' if n > 1 else ' differs'}"
-        differ = [p for p in projects if not self.is_open(p) and self.compared_of(p) != reference]
-        return f"{len(differ)} of {len(projects)} differ" if differ else "None"
+        return [p for p in self.targets(iid) if not self.is_open(p) and self.compared_of(p) != reference]
+
+    def column_of(self, event):
+        """The column of the tree under the mouse: its name (#0: the tree itself)."""
+        column = self.tree.identify_column(event.x)
+        n = int(column[1:] or 0)
+        return self.tree["columns"][n - 1] if n else "#0"
 
     def refresh(self, form=True):
-        """The columns Run and Differences (and that of the options), the colours, the node selected (its form too)
-        and the summary."""
+        """The columns Run and ↺ (and that of the options), the colours and the bold names (settings that differ
+        from those of the project open), the node selected (its form too) and the summary."""
         if self.extra and hasattr(self.step.options, "prepare"):
             self.step.options.prepare(self)
         for iid, item in self.items.items():
@@ -858,11 +886,13 @@ class BatchDialog(Dialog):
             checked = [p for p in runnable if key(p.folder) in self.checked]
             run = "☑" if runnable and len(checked) == len(runnable) else "◩" if checked else "☐" if runnable else ""
             tags = ["lost"] if below and all(p.lost for p in below) else [] if runnable else ["grey"]
-            values = (run, self.step.options.cell(self, iid)) if self.extra else (run,)
-            self.tree.item(iid, values=values + (self.differences(iid),), tags=tags)
-        # Greyed when all the projects have the settings of the project open
-        self.reset_all_button.state(["disabled"] if self.same_as_open([p for p in self.ws.projects if self.runnable(p)])
-                                    else ["!disabled"])
+            differs = bool(runnable) and bool(self.differing(iid))
+            if differs:
+                tags.append("differs")
+            values = ((run, self.step.options.cell(self, iid)) if self.extra else (run,)) + ("↺" if differs else "",)
+            # The name in bold only (the other columns in the normal font)
+            name = self.names.get(iid, "")
+            self.tree.item(iid, text=bold_text(name) if differs else name, values=values, tags=tags)
         n = len(self.chosen())
         greyed = sum(not self.runnable(p) for p in self.ws.projects)
         self.summary["text"] = f"{n} project(s) to run" + (f" ({greyed} can't be run)" if greyed else "")
@@ -872,9 +902,12 @@ class BatchDialog(Dialog):
         return [p for p in self.ws.projects if self.runnable(p) and key(p.folder) in self.checked]
 
     def click(self, event):
-        column, iid = self.tree.identify_column(event.x), self.tree.identify_row(event.y)
-        if iid and column == "#1":
+        column, iid = self.column_of(event), self.tree.identify_row(event.y)
+        if iid and column == "run":
             self.toggle(iid)
+        elif iid and column == "reset" and self.tree.set(iid, "reset"):
+            self.reset_node(iid)
+            return "break"
 
     def ctrl_click(self, event):
         """Ctrl+click on a node: to the options (the stitching), the node selected kept."""
@@ -887,9 +920,15 @@ class BatchDialog(Dialog):
 
     def context_menu(self, event):
         iid = self.tree.identify_row(event.y)
-        items = self.step.options.context_items(self, iid) if iid else []
+        if not iid:
+            return
+        # The options of the node (a stitched project: the settings of its stitch reference, the alignment); the
+        # settings of the open project: its ↺
+        items = self.step.options.context_items(self, iid) if hasattr(self.step.options, "context_items") else []
         if not items:
             return
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
         menu = tk.Menu(self, tearoff=0)
         for label, command in items:
             menu.add_command(label=label, command=command, state=tk.NORMAL if command else tk.DISABLED)
@@ -897,7 +936,10 @@ class BatchDialog(Dialog):
 
     def show_cell_tip(self, event):
         iid = self.tree.identify_row(event.y)
-        text = self.tree.set(iid, "extra") if iid and self.tree.identify_column(event.x) == "#2" else ""
+        text = ""
+        if iid and self.column_of(event) == "extra":
+            tip = getattr(self.step.options, "tip", None)
+            text = tip(self, iid) if tip is not None else self.tree.set(iid, "extra")
         if (iid, text) == self.cell_tip_at:
             return
         self.hide_cell_tip()
@@ -988,24 +1030,11 @@ class BatchDialog(Dialog):
     # ------------------------------------------------------------------ the node selected
 
     def build_node_pane(self, tab):
-        self.node_title = ttk.Label(tab, font=("TkDefaultFont", 9, "bold"), wraplength=360)
-        self.node_title.pack(anchor=tk.W)
-        self.node_text = ttk.Label(tab, wraplength=360, justify=tk.LEFT)
-        self.node_text.pack(anchor=tk.W, pady=(4, 0))
-        self.reset_button = ttk.Button(tab, command=self.reset_node)
-        self.reset_button.pack(anchor=tk.W, fill=tk.X, pady=(8, 0))
-        # The settings of the reference of the stitching of each project (options with stitchings)
-        self.stitch_button = None
-        if hasattr(self.step.options, "reference_of"):
-            self.stitch_button = ttk.Button(tab, text="Reset to the stitch reference project",
-                                            command=lambda: self.copy_stitch_reference())
-            self.stitch_button.pack(anchor=tk.W, fill=tk.X, pady=(4, 0))
-        self.node_note = ttk.Label(tab, foreground="#a33", wraplength=360)
-        self.node_note.pack(anchor=tk.W, pady=(6, 0))
+        """The settings of the node selected (the box named after the node), a note when a change is refused."""
+        self.node_note = ttk.Label(tab, foreground="#a33", wraplength=340)
+        self.node_note.pack(anchor=tk.W)
         self.form = None
         if self.step.fields is not None:
-            ttk.Label(tab, text="Settings",
-                      wraplength=360, font=("TkDefaultFont", 9, "bold")).pack(anchor=tk.W, pady=(8, 2))
             self.form = (self.step.form or SettingsForm)(tab, self.field_changed, self.unify_field, self.choice_changed)
             self.form.pack(fill=tk.BOTH, expand=True)
 
@@ -1028,30 +1057,11 @@ class BatchDialog(Dialog):
             return
         projects = self.targets(iid)
         name = self.node_label(root, path)
-        self.node_title["text"] = (f"Project {path or name}" if kind == "project" else f"Folder {path or root}")
-        opened = self.open_project()
-        self.reset_button.configure(text=f"Reset to the settings of the open project ({opened.label()})"
-                                    if opened else "Reset to the settings of the interface")
-        # Greyed without projects, for the project open (its settings: those of the interface) and when they all have
-        # its settings already; the stitch reference likewise
-        self.reset_button.state(["!disabled"] if projects and not self.same_as_open(projects) else ["disabled"])
-        if self.stitch_button is not None:
-            self.stitch_button.state(["!disabled"] if self.stitch_references(projects, differing=True)
-                                     else ["disabled"])
+        self.node_tab.configure(text=f"Settings: {name}" + ("" if projects else " (no project of this step)"))
         first = self.settings_of(projects[0]) if projects else {}
         others = [self.compared_of(p) for p in projects[1:]]
         flat = self.compared_of(projects[0]) if projects else {}
         differs = {path for f in others for path in set(flat) | set(f) if flat.get(path) != f.get(path)}
-        try:
-            text = cap(self.step.describe(first)) if projects else "No project of this step below it"
-        except (KeyError, TypeError, ValueError) as e:
-            text = f"(Settings not readable: {e})"
-        if kind != "project" and len(projects) > 1:
-            n = len(differs)
-            text += (f"\n(Shown: those of {projects[0].label()}; "
-                     + (f"{n} setting{'s differ' if n > 1 else ' differs'} between the {len(projects)} projects)"
-                        if differs else f"the same for its {len(projects)} projects)"))
-        self.node_text["text"] = text
         if not form:
             return
         # A field changed in the form of the previous node is applied to it first
@@ -1218,12 +1228,6 @@ class BatchDialog(Dialog):
         self.store(new)
         self.refresh()
 
-    def same_as_open(self, projects):
-        """All the projects (but the project open) have the settings of the project open (those of each project only
-        left out): resetting them to it changes nothing."""
-        reference = self.compared_reference()
-        return all(self.is_open(p) or self.compared_of(p) == reference for p in projects)
-
     def stitch_references(self, projects, differing=False, part=None):
         """The projects stitched to a reference project (not the references): {key: (project, reference)}; none
         without stitchings. differing: only those whose settings (part: settings[part] only) differ from those of
@@ -1246,13 +1250,14 @@ class BatchDialog(Dialog):
                     out[key(p.folder)] = (p, reference)
         return out
 
-    def copy_stitch_reference(self, part=None):
-        """The projects of the node selected stitched to a reference: the settings of the reference of their
-        stitching, each keeping its settings of each project only (its export path) and those of its field of view
-        (options.own_paths: its camera); part: only settings[part] (the quantities exported). Returns the number of
-        projects changed."""
-        pairs = self.stitch_references(self.targets(getattr(self, "form_node", None) or self.tree.focus()),
-                                       differing=True, part=part)
+    def copy_stitch_reference(self, part=None, projects=None):
+        """Projects stitched to a reference (those of the node selected by default): the settings of the reference of
+        their stitching (their quantities exported too), each keeping its settings of each project only (its export
+        path) and those of its field of view (options.own_paths: its camera); part: only settings[part] (the
+        quantities exported). Returns the number of projects changed."""
+        if projects is None:
+            projects = self.targets(getattr(self, "form_node", None) or self.tree.focus())
+        pairs = self.stitch_references(projects, differing=True, part=part)
         if not pairs:
             self.bell()
             self.node_note["text"] = ("No project of this node is stitched to a reference project with other "
@@ -1289,16 +1294,17 @@ class BatchDialog(Dialog):
                                   "their stitching" + ("" if part else " (their cameras kept)"))
         return len(new)
 
-    def reset_node(self):
-        """The projects of the node selected with the settings of the project open (of the interface)."""
-        self.reset_to([p for p in self.targets(self.tree.focus()) if not self.is_open(p)])
-
-    def reset_all(self):
-        """All the projects with the settings of the project open (of the interface)."""
-        if not messagebox.askyesno("Batch", "Give all the projects the settings of the project open (those of the "
-                                            "interface)?", parent=self):
+    def reset_node(self, iid=None):
+        """The projects of a node (the one selected by default) whose settings differ from those of the project open:
+        its settings (of the interface); asked first for a folder."""
+        projects = self.differing(iid or self.tree.focus())
+        if not projects:
             return
-        self.reset_to([p for p in self.ws.projects if self.runnable(p) and not self.is_open(p)])
+        if len(projects) > 1 and not messagebox.askyesno(
+                "Batch", f"Give the {len(projects)} projects of this folder whose settings differ the settings of the "
+                         "open project?", parent=self):
+            return
+        self.reset_to(projects)
 
     # ------------------------------------------------------------------ saving
 

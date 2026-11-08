@@ -12,7 +12,7 @@ everything needed:
 
 ## What was checked
 
-- `pip wheel .` builds `velocihub-1.0.0-py3-none-any.whl` with every subpackage, the vendored TracTrac and its
+- `pip wheel .` builds `velocihub-1.1.0-py3-none-any.whl` with every subpackage, the vendored TracTrac and its
   licence, and the three licence files (`LICENSE`, `NOTICE.md`, TracTrac's `LICENSE`).
 - The wheel installed into an empty folder (outside the repository) imports, and its commands work:
   `velocihub-batch` ran the pre-processing and the PIV (PaIRS-UniNa found in its own conda environment) end to end,
@@ -26,7 +26,7 @@ everything needed:
 
 ```bash
 pip install "velocihub[all] @ git+https://github.com/RexAttaque/VelociHub.git"
-pip install "velocihub[all] @ git+https://github.com/RexAttaque/VelociHub.git@v1.0.0"   # a tagged version
+pip install "velocihub[all] @ git+https://github.com/RexAttaque/VelociHub.git@v1.1.0"   # a tagged version
 ```
 
 A private repository asks for your GitHub credentials (or use an SSH URL, `git+ssh://git@github.com/...`).
@@ -35,8 +35,8 @@ A private repository asks for your GitHub credentials (or use an SSH URL, `git+s
 
 ```bash
 python -m pip install build
-python -m build                    # dist/velocihub-1.0.0-py3-none-any.whl and dist/velocihub-1.0.0.tar.gz
-pip install dist/velocihub-1.0.0-py3-none-any.whl
+python -m build                    # dist/velocihub-1.1.0-py3-none-any.whl and dist/velocihub-1.1.0.tar.gz
+pip install dist/velocihub-1.1.0-py3-none-any.whl
 ```
 
 ### Publish on PyPI (`pip install velocihub`)
@@ -70,7 +70,7 @@ interpreter, so the two Python versions never mix.
 
 ```bash
 conda install -n base conda-build          # once
-conda build conda -c conda-forge           # builds velocihub-1.0.0-py_0.conda in the local channel
+conda build conda -c conda-forge           # builds velocihub-1.1.0-py_0.conda in the local channel
 conda create -n vh -c local -c conda-forge velocihub
 conda activate vh
 velocihub
@@ -96,6 +96,6 @@ mode (changes to the code apply immediately).
 
 ## Recommendation
 
-1. Keep installing from GitHub with pip (`pip install "velocihub[all] @ git+..."`), tagging releases (`v1.0.0`).
+1. Keep installing from GitHub with pip (`pip install "velocihub[all] @ git+..."`), tagging releases (`v1.1.0`).
 2. When it should be public: publish the wheel on PyPI, and a conda package on your own anaconda.org channel.
 3. Each release: bump `__version__` in `velocihub/credits.py` and the version in `conda/meta.yaml`, tag, build, upload.

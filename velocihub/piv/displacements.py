@@ -1,4 +1,4 @@
-"""Displacements of a pair of images, as the image tile of the page PIV/PTV shows them (its views |d|, d_x, d_y):
+"""Displacements of a pair of images, as the image tile of the page Velocimetry shows them (its views |d|, d_x, d_y):
 on the grid of the vector fields for a PIV, at the particles tracked for a PTV (tracks.npz: pair_particles), with the
 colour limits of the maps (displacement_limits). Displacements in pixels, y upwards; positions in pixels from the
 top-left corner of the images.
@@ -81,7 +81,7 @@ def grid_pixels(fields):
 
 def pair_displacements(fields, k, tracks=None):
     """Displacements of the map k of vector fields read in pixels (load_vectors(path, pixels=True)), as the image
-    tile of the page PIV/PTV draws them: for a PTV whose particles tracked are known (tracks: read_tracks of
+    tile of the page Velocimetry draws them: for a PTV whose particles tracked are known (tracks: read_tracks of
     fields.tracks, read if None), the particles of the pair ("kind": "particles", 1D arrays: pair_particles);
     otherwise the grid ("kind": "grid", 2D arrays). Returns {"kind", "x", "y" (px from the top-left corner), "dx",
     "dy" (px, y upwards)}, or None if the displacements in pixels are unknown."""

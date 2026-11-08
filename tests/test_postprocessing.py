@@ -101,11 +101,14 @@ def test_pod_modes_exported(copy):
 
 
 def test_export_folders(measurements):
-    """PostProcessing for a PIV, PostProcessing_PTV for a PTV (the PostProcessing saved before: the default), a folder
-    of its own kept."""
+    """The subfolder of the pipeline in PostProcessing (PostProcessing/PaIRS, PostProcessing/TracTrac; the default
+    folders of the previous versions, PostProcessing and PostProcessing_PTV, give it), a folder of its own kept;
+    PostProcessing for vector fields of no pipeline."""
     piv_maps, ptv_maps = (os.path.join(measurements["both"], m) for m in ("PIV", "PTV"))
-    assert default_export_folder(piv_maps) == POSTPROCESSING_FOLDER
-    assert default_export_folder(ptv_maps) == POSTPROCESSING_PTV_FOLDER
-    assert export_folder_name("PostProcessing", ptv_maps) == POSTPROCESSING_PTV_FOLDER
-    assert export_folder_name(None, piv_maps) == POSTPROCESSING_FOLDER
+    assert default_export_folder(piv_maps) == os.path.join(POSTPROCESSING_FOLDER, "PaIRS")
+    assert default_export_folder(ptv_maps) == os.path.join(POSTPROCESSING_FOLDER, "TracTrac")
+    assert export_folder_name("PostProcessing", ptv_maps) == os.path.join(POSTPROCESSING_FOLDER, "TracTrac")
+    assert export_folder_name(POSTPROCESSING_PTV_FOLDER, ptv_maps) == os.path.join(POSTPROCESSING_FOLDER, "TracTrac")
+    assert export_folder_name(None, piv_maps) == os.path.join(POSTPROCESSING_FOLDER, "PaIRS")
     assert export_folder_name("Mine", ptv_maps) == "Mine"
+    assert default_export_folder(measurements["images"]) == POSTPROCESSING_FOLDER

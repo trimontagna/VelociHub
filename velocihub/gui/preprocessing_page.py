@@ -22,7 +22,7 @@ from matplotlib.backend_bases import MouseButton
 from matplotlib.patches import Polygon as MplPolygon
 
 from ..batch import masks_from_file
-from ..preprocessing import (DEFAULT_CONTRAST, DEFAULT_MODES, FILTERS, MODE_LABEL, PREPROCESSING_FOLDER,
+from ..preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, FILTERS, MODE_LABEL, PREPROCESSING_FOLDER,
                              ContrastSettings, Mask, PODBackgroundRemoval, available_memory, closed, describe_images,
                              draw_spectrum, imread, list_files, load_npz, mode_limits, mode_title, mround, num2str,
                              polygon_centroid, read_manifest, same_path, segment_distance, str2double)
@@ -81,7 +81,17 @@ def preprocessing_fields(section):
     fields.append(Field(("export_folder",), "Export Path (Relative)", "folder", default=PREPROCESSING_FOLDER,
                         help=("Folder of the images exported, relative to each project (↺: PreProcessing). Set "
                               "per project, not on folders."), project_only=True))
+    fields.append(Field(("export_format",), "Format of the images exported", "choice",
+                        tuple(EXPORT_FORMAT_LABELS.items()), help=EXPORT_FORMAT_HELP, default=DEFAULT_EXPORT_FORMAT))
     return fields
+
+
+# Formats of the images exported (preprocessing.EXPORT_FORMATS), as the interface names them
+EXPORT_FORMAT_LABELS = {"same": "Same as the source", "png": "PNG", "bmp": "BMP", "tiff": "TIFF"}
+EXPORT_FORMAT_HELP = ("Format of the images exported. Same as the source: the format of each source image (a JPEG is "
+                      "compressed again, with losses). PNG (8 or 16 bit), BMP (8 bit only) and TIFF (any depth, "
+                      "uncompressed) are lossless. The images are in one channel (grey levels): a colour image is "
+                      "read as its brightness, max(R, G, B).")
 
 
 BATCH_MASKS_HINT = ("The masks of the project (drawn in the page Pre-processing): click ☑/☐ to enable or disable a "
@@ -140,6 +150,15 @@ class ControlPanel(SidePanel):
                                              PREPROCESSING_FOLDER, "Export folder of the pre-processed images...",
                                              on_change=page.export_folder_changed)
             self.export_folder.pack(fill=tk.X)
+            row = ttk.Frame(footer)
+            row.pack(fill=tk.X, pady=(6, 0))
+            ttk.Label(row, text="Image format").pack(side=tk.LEFT)
+            HelpDot(row, EXPORT_FORMAT_HELP).pack(side=tk.LEFT, padx=(4, 6))
+            self.export_format = tk.StringVar(value=EXPORT_FORMAT_LABELS[DEFAULT_EXPORT_FORMAT])
+            box = ttk.Combobox(row, textvariable=self.export_format, values=list(EXPORT_FORMAT_LABELS.values()),
+                               state="readonly", width=18)
+            box.pack(side=tk.LEFT)
+            box.bind("<<ComboboxSelected>>", lambda _event: page.export_format_changed())
             row = ttk.Frame(footer)
             row.pack(anchor=tk.E, pady=(6, 0))
             ttk.Button(row, text="Batch...", command=page.batch).pack(side=tk.LEFT, padx=(0, 6))
@@ -896,7 +915,8 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
         those of the section of the project (the export folder relative to the image folder)."""
         root = self.path_in if self.Check_imsel else None
         state = self.project_state(lambda path: relative(path, root) if root else None)
-        return {key: state[key] for key in ("masks", "contrast", "background_removal", "export_folder")}
+        return {key: state[key] for key in ("masks", "contrast", "background_removal", "export_folder",
+                                            "export_format")}
 
     def batch_step(self):
         return BatchStep("preprocessing", "Pre-processing", lambda project: project.images, self.batch_settings,
@@ -974,6 +994,13 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
     def arrow(self, step):
         self.callback_arrows(step, self.active_panel)
 
+    def export_format_changed(self):
+        """Another format of the images exported: the images exported in it, and the pages using them, follow."""
+        labels = {label: key for key, label in EXPORT_FORMAT_LABELS.items()}
+        self.export_format = labels.get(self.panel.export_format.get(), DEFAULT_EXPORT_FORMAT)
+        self.panel.update_export()
+        self.app.save_project()
+
     def export_folder_changed(self):
         """Another export folder: the images exported in it, and the pages using them, follow."""
         self.path_export = self.panel.export_folder.get()
@@ -1016,6 +1043,7 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
                                        "modes_to_evaluate": panel.n_modes.get()},
                 "automatic_threshold": {"eps_sigma": panel.eps_sigma.get(), "eps_psi": panel.eps_psi.get()},
                 "export_folder": rel(self.export_folder()),
+                "export_format": self.export_format,
                 "export": export,
                 "pod": pod}
 
@@ -1048,6 +1076,9 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
                 setattr(self, "eps_auto_" + key[4:], str2double(eps[key]))
         panel.export_folder.set(path(data.get("export_folder")))
         self.path_export = panel.export_folder.get()
+        fmt = data.get("export_format")
+        self.export_format = fmt if fmt in EXPORT_FORMAT_LABELS else DEFAULT_EXPORT_FORMAT
+        panel.export_format.set(EXPORT_FORMAT_LABELS[self.export_format])
         pod = data.get("pod")
         if pod:
             filename = path(pod.get("file"))
@@ -1376,7 +1407,7 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
 
             # Show the mode, keeping the zoom and the colormap
             clim = self.phi_caxis.val if self.phi_caxis.active else mode_limits(PHI_bloc)
-            title = mode_title(self.showing_mod_i, self.NMod_saved, self.NImg)
+            title = mode_title(self.showing_mod_i, self.NMod_saved, self.eigVal)
             if self.figure_modes.im is None:
                 self.phi_caxis.val = self.figure_modes.imagesc(PHI_bloc, "hot", clim, title, colorbar=True)
             else:

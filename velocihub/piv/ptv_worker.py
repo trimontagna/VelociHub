@@ -44,6 +44,21 @@ PEAK_SUBPIX = {"quadratic": 0, "gaussian": 1}
 ROWS = ("frame", "id", "x", "y", "u", "v", "ax", "ay", "err")
 
 
+def load_greyscale():
+    """velocihub/greyscale.py, the reader of the images of every step of VelociHub, loaded from its file: this script
+    runs under another interpreter, which may not have VelociHub."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "greyscale.py")
+    spec = importlib.util.spec_from_file_location("velocihub_greyscale", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GREYSCALE = load_greyscale()
+
+
 # The messages go to the standard output; what TracTrac prints (its warnings) is discarded (main)
 OUT = sys.stdout
 
@@ -53,20 +68,16 @@ def say(**message):
 
 
 def read(path):
-    """Image as TracTrac reads it (cv2.imread(path, 2): one channel, any depth), from a path with any characters. A
-    network or USB drive sometimes refuses a read for a moment: it is tried again."""
-    import cv2
-
-    for attempt in range(5):
-        try:
-            image = cv2.imdecode(np.fromfile(path, np.uint8), 2)
-            if image is None:
-                raise OSError(f"can't read the image {path}")
-            return image
-        except OSError:
-            if attempt == 4:
-                raise
-            time.sleep(3)
+    """Image read as every step of VelociHub reads it (greyscale.read_grey: one channel, the brightness of a colour
+    image), as TracTrac takes it: 8 or 16 bit (its imProc scales them to [0, 1)). A float image is taken in [0, 1] if
+    its values are, else in grey levels, and converted to 16 bit (clipped to 0-65535)."""
+    image = GREYSCALE.read_grey(path)
+    if image.dtype in (np.uint8, np.uint16):
+        return image
+    image = np.nan_to_num(image.astype(np.float64))
+    if image.size and image.min() >= 0 and image.max() <= 1:
+        image = image * 65535
+    return np.clip(np.round(image), 0, 65535).astype(np.uint16)
 
 
 def thresholds(s, width, height):
@@ -391,9 +402,8 @@ def compute(job, work):
     total = len(N) - 2
     passes = 1 + int(tracking.th[0]["vid_loop"])
     if resumed:
-        valid, particles = pair_quality(work, tracking.chunks)
         say(type="progress", phase="pairs", done=resumed, total=n_pairs, rate=None, resumed=True, first=0,
-            valid=valid, particles=particles, peak_ratio=[])
+            particles=pair_particles(work, tracking.chunks))
     t0, started, new, said, latest = time.time(), time.time(), 0, 0.0, 0.0
     for i in range(tracking.i, len(N)):
         if os.path.exists(stop_file):
@@ -446,20 +456,20 @@ def compute(job, work):
 
 
 def say_pair(tracking, k, n_pairs, rate):
-    """Progress: the pair k binned, its valid cells (%) and its particles tracked (links binned on the grid)."""
+    """Progress: the pair k binned and its particles tracked (links binned on the grid; not its valid cells: not a
+    reliable quality of a PTV)."""
     binned = tracking.binned[-1]
     say(type="progress", phase="pairs", done=k + 1, total=n_pairs, rate=rate, pair=k,
-        valid=float(np.mean(binned["info"] == 1) * 100), particles=int(binned["count"].sum()), peak_ratio=None)
+        particles=int(binned["count"].sum()))
 
 
-def pair_quality(work, chunks):
-    """Valid cells (%) and particles tracked of the pairs of the chunks saved."""
-    valid, particles = [], []
+def pair_particles(work, chunks):
+    """Particles tracked of the pairs of the chunks saved."""
+    particles = []
     for c in range(chunks):
         with np.load(os.path.join(work, f"ptv_chunk_{c:05d}.npz")) as z:
-            valid += [float(np.mean(info == 1) * 100) for info in z["pair_info"]]
             particles += [int(count.sum()) for count in z["pair_count"]]
-    return valid, particles
+    return particles
 
 
 def gather(tracking, work):

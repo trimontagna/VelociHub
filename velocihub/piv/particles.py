@@ -17,6 +17,8 @@ and counted in each.
 import numpy as np
 from scipy import ndimage
 
+from ..greyscale import to_grey
+
 # Particles needed in an interrogation window (rule of thumb of the PIV)
 MIN_PARTICLES = 10
 # Signal-to-noise ratio of a particle and diameter of the particle images (px), by default
@@ -34,11 +36,9 @@ def count_particles(image, center, sizes, snr=DEFAULT_SNR, diameter=DEFAULT_DIAM
     corner of the image); box = (x0, y0, size) of the largest window; background and noise (grey levels)."""
     if not snr > 0 or not diameter > 0:
         raise ValueError("The signal-to-noise ratio and the particle diameter must be positive")
-    A = np.asarray(image)
+    A = to_grey(image)
     integers = np.issubdtype(A.dtype, np.integer)
     A = A.astype(np.float64)
-    if A.ndim == 3:
-        A = A.mean(axis=2)
     H, W = A.shape
     sizes = sorted({int(s) for s in sizes if int(s) > 0}, reverse=True)
     if not sizes:

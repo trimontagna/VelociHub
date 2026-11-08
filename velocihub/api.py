@@ -9,7 +9,7 @@ interface writes, so a project prepared or run here opens in the interface as it
     p = vh.Project("D:/Jet/FOV_1/Run_30")
     p.set_preprocessing(masks="D:/Jet/masks.json", filters=["capping"], cap_n=10, modes_removed=6)
     p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
-    p.set_postprocessing(camera=vh.Camera(196.1, frame_rate_hz=150), outlier_k=4, use_u_ref=True, l_ref=50,
+    p.set_postprocessing(camera=vh.Camera(196.1, frame_rate_hz=150, y_shift=0.5), outlier_k=4, use_u_ref=True, l_ref=50,
                          figures=["mean_velocity", "u_rms"], videos=["velocity"], fps=24)
     p.save()                                       # the settings in the project file (as the window Batch)
     p.run()                                        # pre-processing, PIV, post-processing
@@ -29,10 +29,12 @@ from dataclasses import asdict
 
 from . import batch, batch_run, piv
 from .fields import load_vectors
+from .pipelines import DEFAULT_PIPELINE, chosen_results, results_folders, selected_results
 from .postprocessing import PostProcessing, PostSettings
-from .preprocessing import DEFAULT_CONTRAST, DEFAULT_MODES, PREPROCESSING_FOLDER, ContrastSettings, PODBackgroundRemoval
+from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, PREPROCESSING_FOLDER, ContrastSettings,
+                            PODBackgroundRemoval, export_format_of)
 from .project import PROJECT_FILE, read_project, write_project
-from .settings import (export_spec, piv_from_project, piv_to_project, post_from_project, post_to_project,
+from .settings import (camera_of, camera_record, export_spec, piv_from_project, piv_to_project, post_from_project, post_to_project,
                        preprocessing_from_project, preprocessing_to_project, settings_from_record, settings_record,
                        validate_piv, validate_post, validate_preprocessing)
 from .workspace import Workspace, image_names, scan
@@ -47,7 +49,7 @@ def default_preprocessing():
     contrast["filters"] = list(DEFAULT_CONTRAST.filters)
     return {"masks": [], "contrast": contrast,
             "background_removal": {"enabled": True, "modes_removed": str(DEFAULT_MODES)},
-            "export_folder": PREPROCESSING_FOLDER}
+            "export_folder": PREPROCESSING_FOLDER, "export_format": DEFAULT_EXPORT_FORMAT}
 
 
 def mask_record(mask, i=0):
@@ -97,14 +99,8 @@ class Project:
         return os.path.join(self.folder, PROJECT_FILE)
 
     def results_folders(self):
-        """The folders of its PIV/PTV results ({"PIV": folder, "PTV": folder}: those it has)."""
-        out = {}
-        for method, sub in (("PIV", piv.PIV_FOLDER), ("PTV", piv.PTV_FOLDER)):
-            if os.path.isfile(os.path.join(self.folder, sub, piv.VECTORS_FILE)):
-                out[method] = os.path.join(self.folder, sub)
-        if "PIV" not in out and os.path.isfile(os.path.join(self.folder, piv.VECTORS_FILE)):
-            out["PIV"] = self.folder
-        return out
+        """The folders of its results by pipeline ({"PaIRS": folder, "TracTrac": folder}: those it has)."""
+        return results_folders(self.folder)
 
     # ------------------------------------------------------------------ settings
 
@@ -119,7 +115,8 @@ class Project:
         return self
 
     def set_preprocessing(self, masks=None, masks_file=None, contrast=None, filters=None, stage=None,
-                          background_removal=None, modes_removed=None, export_folder=None, **parameters):
+                          background_removal=None, modes_removed=None, export_folder=None, export_format=None,
+                          **parameters):
         """Change the pre-processing (the side panel of the page Pre-processing; None: unchanged).
 
         masks: a list of polygons [[x, y], ...] or of preprocessing.Mask, or the path of a file of masks (its masks
@@ -127,7 +124,8 @@ class Project:
         contrast: a ContrastSettings (or its dictionary); filters, stage and the parameters of the filters (cap_n,
         mm_window, mm_contrast, clip, tiles, edge_sigma, edge_factor): those changed in it; background_removal:
         on/off; modes_removed: the POD modes removed (turns the background removal on, 0 off); export_folder: the
-        folder of the images exported, relative to the project (PreProcessing by default)."""
+        folder of the images exported, relative to the project (PreProcessing by default); export_format: their
+        format, "same" (as the source images, the default), "png", "bmp" or "tiff"."""
         s = self.preprocessing
         if masks is not None:
             if isinstance(masks, (str, os.PathLike)):
@@ -154,11 +152,13 @@ class Project:
         s["background_removal"] = bgrem
         if export_folder is not None:
             s["export_folder"] = export_folder
+        if export_format is not None:
+            s["export_format"] = export_format_of(export_format)
         self.preprocessing = validate_preprocessing(s)
         return self
 
     def set_piv(self, engine=None, settings=None, regression=None, output_folder=None, **engine_settings):
-        """Change the PIV/PTV (the side panel of the page PIV/PTV; None: unchanged).
+        """Change the PIV/PTV (the side panel of the page Velocimetry; None: unchanged).
 
         engine: "PaIRS-UniNa" or "TracTrac" (name or key); settings: the settings of the engine (a dictionary,
         merged with those it has), or as keywords (windows=(128, 64, 32), overlap=50, particle_size=3...; see
@@ -185,8 +185,10 @@ class Project:
         """Change the post-processing (the side panel of the page Post-processing and its window Quantities; None:
         unchanged).
 
-        results: "PIV" or "PTV" (the results post-processed); space: "physical" or "sensor"; camera: a piv.Camera
-        (or a dictionary fov_width_mm, x_offset_mm, y_offset_mm, frame_rate_hz; space physical); settings: a
+        results: the results sets exported (pipelines.py: "PaIRS", "TracTrac", or a list of them; the same export for
+        each); space: "physical" or "sensor"; camera: a piv.Camera
+        (or a dictionary of its fields: fov_width_mm, fov_height_mm, x_offset_mm, y_offset_mm, x_shift, y_shift,
+        frame_rate_hz; space physical); settings: a
         PostSettings, or the fields of the recipe as keywords (outlier_k=4, use_u_ref=True, l_ref=50...; see
         docs/postprocessing.md); export_folder: relative to the project (PostProcessing by default).
         The export (window Quantities): figures (keys; None in the call: unchanged, [] none... use "all" for all);
@@ -200,9 +202,8 @@ class Project:
         if space is not None:
             s["space"] = space
         if camera is not None:
-            camera = asdict(camera) if isinstance(camera, piv.Camera) else dict(camera)
-            s["camera"] = {k: camera[k] for k in ("fov_width_mm", "x_offset_mm", "y_offset_mm", "frame_rate_hz")
-                           if k in camera}
+            s["camera"] = camera_record(camera_of(asdict(camera) if isinstance(camera, piv.Camera)
+                                                  else dict(camera)))
             s["space"] = space or "physical"
         record = dict(s.get("settings") or settings_record(PostSettings()))
         if settings is not None:
@@ -269,8 +270,8 @@ class Project:
     def _job(self, **options):
         settings = {"preprocessing": copy.deepcopy(self.preprocessing), "piv": copy.deepcopy(self.piv),
                     "postprocessing": copy.deepcopy(self.postprocessing)}
-        maps = self.results_folders().get(settings["postprocessing"].get("results") or "PIV")
-        settings["postprocessing"]["maps_folder"] = maps
+        folders = selected_results(self.results_folders(), settings["postprocessing"].get("results"))
+        settings["postprocessing"].update(maps_folders=folders, maps_folder=next(iter(folders.values()), None))
         return {"folder": self.folder, "settings": settings}, {"options": options}
 
     def preprocess(self):
@@ -283,7 +284,7 @@ class Project:
         return result
 
     def run_piv(self, force=False, report=None):
-        """Run step > Singular of the page PIV/PTV: the images pre-processed first if needed, then the PIV/PTV (and the
+        """Run step > Singular of the page Velocimetry: the images pre-processed first if needed, then the PIV/PTV (and the
         regression), continued from the pairs saved; skipped if the results are up to date (force: computed again).
         report(message): its messages (printed by default). Returns a batch.BatchResult."""
         p = self.piv
@@ -326,12 +327,14 @@ class Project:
         return session
 
     def vector_fields(self, results=None, pixels=None):
-        """Its vector fields (results: "PIV" or "PTV", those of the post-processing by default), in the space of the
-        post-processing (pixels: True for the sensor space, False with the camera)."""
+        """Its vector fields (results: a pipeline, "PaIRS", "TracTrac"...; by default the first results set of the
+        post-processing it has), in the space of the post-processing (pixels: True for the sensor space, False with the
+        camera)."""
         s = self.postprocessing
-        folder = self.results_folders().get(results or s.get("results") or "PIV")
+        chosen = results or s.get("results")
+        folder = chosen_results(self.results_folders(), chosen)
         if folder is None:
-            raise ValueError(f"No {results or s.get('results') or 'PIV'} results in {self.folder}")
+            raise ValueError(f"No {chosen or DEFAULT_PIPELINE} results in {self.folder}")
         camera = s.get("camera")
         if pixels is None:
             pixels = s.get("space") == "sensor" or not camera

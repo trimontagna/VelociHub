@@ -45,7 +45,7 @@ PROJECT_FILE_TYPES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json"), 
 # Menus shared by the pages, first and last; the menus of the pages are between them
 FIRST_MENUS = ("File", "Settings")
 # The menus of the pages not shown (their items never used from the menu bar: their keyboard shortcuts kept)
-HIDDEN_MENUS = ("Pre-processing", "PIV/PTV", "Post-processing")
+HIDDEN_MENUS = ("Pre-processing", "Velocimetry", "Post-processing")
 LAST_MENUS = ("Help",)
 
 
@@ -292,7 +292,7 @@ class MainWindow:
         self.show_project_name()
 
     def show_results(self, project, method):
-        """The results of a method (PIV, PTV) of the project open in the post-processing: its maps folder (kept in
+        """The results of a pipeline (PaIRS, TracTrac...) of the project open in the post-processing: its maps folder (kept in
         the project)."""
         post, folder = self.page("post"), project.results_folders().get(method)
         if post is None or folder is None:
@@ -320,8 +320,8 @@ class MainWindow:
         raise ValueError(f"No page for the batch settings {key}")
 
     def open_workspace_project(self, project, method=None):
-        """Open a project of the workspace: its images (with its project), else its PIV/PTV results; method: with
-        its results of this method (PIV, PTV) in the post-processing (show_results)."""
+        """Open a project of the workspace: its images (with its project), else its results; method: with its
+        results of this pipeline (PaIRS, TracTrac...) in the post-processing (show_results)."""
         reason = self.busy()
         if reason:
             self.msgbox(reason, "Projects", "warn")

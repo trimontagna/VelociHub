@@ -1,7 +1,8 @@
 """Page of the post-processing: the vector fields of the PIV (or of a folder of DynamicStudio CSV exports), in the
 sensor space (pixels and pairs) or the physical space (with the camera settings), the recipe of the
-post-processing (statistical outlier filtering, reference quantities, peak locking, jet potential core; all the
-analyses are made) and its figures in tiles. The figures of
+post-processing (statistical outlier filtering, reference quantities, peak locking, the add-ons: jet theory; all
+the analyses are made) and its figures in tiles (menus: a submenu per group of quantities, the images and the POD in
+Pre-Processing, the add-ons in Add-ons). The figures of
 the recipe are exported to the subfolder PostProcessing of the folder of the measurement (or to the folder chosen),
 with the key numbers and the recipe. The vector fields are those of a folder: the results of the page of the PIV by
 default (if there is one), or another folder (vectors.npz, or DynamicStudio CSV exports)."""
@@ -17,75 +18,123 @@ from tkinter import filedialog, ttk
 
 from PIL import Image
 
-from .. import imaging, lagrangian, piv
+from .. import imaging, jet, lagrangian, piv
 from ..fields import (VIDEO_FORMATS, Video, Wiper, count_maps, load_csv_folder, load_vectors, num2str, ptv_results,
                       scale_frames, sig2)
-from ..postprocessing import (FIGURE_GROUPS, FIGURE_SYMBOLS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES,
-                              POSTPROCESSING_FOLDER, PostProcessing, PostSettings, count_results,
+from ..postprocessing import (FIGURE_GROUPS, FIGURE_SYMBOLS, FIGURE_TITLES, INSTANTANEOUS, MAP_FIGURES, MENU_PARENTS,
+                              PIV_GROUP, POSTPROCESSING_FOLDER, PostProcessing, PostSettings, count_results,
                               default_export_folder, previous_results, remove_results)
+from ..pipelines import chosen_results, pipelines, results_folders, selected_results
 from ..preprocessing import same_path
 from .batch_dialog import BatchStep, Field, PanelForm, run_batch
+from .cursor import MapCursor
 from .widgets import (Dialog, FigurePanel, FigureSelector, FolderEntry, HelpDot, Page, RangeSlider, SidePanel,
-                      ask_colour_range, colour_tools)
+                      ask_colour_range, colour_tools, hover_tip)
 from ..prefs import getpref, setpref
-from ..settings import (COMPARE_FRACTION, export_choice, export_index, export_maps, export_options,
+from ..settings import (CAMERA_KEYS, COMPARE_FRACTION, camera_of, camera_record, export_choice, export_index, export_maps, export_options,
                         figure_params_from_tiles, figure_params_of, image_settings_of, post_from_project,
                         post_to_project, read_step_fps, settings_from_record, settings_record, validate_post,
                         video_settings, video_settings_of)
 
 # Figures shown in the tiles at the start (the instantaneous ones are browsed with the slider and the arrows)
-DEFAULT_VIEWS = ("velocity", "mean_velocity", "turbulence_intensity", "core_map")
+DEFAULT_VIEWS = ("velocity", "mean_velocity", "turbulence_intensity", "mean_vorticity")
 # Second quantity of a tile, compared with the first one with a wiper: the maps, or none (the default)
 NO_COMPARISON = "none"
 COMPARE_GROUPS = [(None, (NO_COMPARISON,))] + [(group, tuple(k for k in keys if k in MAP_FIGURES))
                                                for group, keys in FIGURE_GROUPS]
 COMPARE_TITLES = {**FIGURE_TITLES, NO_COMPARISON: "None"}
 # The symbols of the quantities (LaTeX) in plain text, for the widgets (Tk can't show LaTeX): replaced in this order,
-# then the bar or the tilde over the first letter of \overline{...}, \widetilde{...}
-PLAIN_SYMBOLS = [("$", ""), (r"\mathbf{u}", "u"), (r"\mathrm{valid}", "valid"), (r"\omega", "ω"), (r"\sigma", "σ"),
+# then \overline{...} as "Mean ...", \widetilde{...} as "Med. ..." (Tk draws a combining bar after its letter, not
+# over it), the standard deviations, skewness and kurtosis in words (σ_u: RMS u, γ_u: Skew. u, β_u: Kurt. u)
+PLAIN_SYMBOLS = [("$", ""), (r"\mathbf{u}", "u"), (r"\mathbf{a}", "a"), (r"\mathrm{valid}", "valid"), (r"\omega", "ω"), (r"\sigma", "σ"),
                  (r"\gamma", "γ"), (r"\beta", "β"), (r"\tau", "τ"), (r"\%", "%"), ("_{d_x}", "_dx"), ("_{d_y}", "_dy"),
                  (r"\partial ", "∂"), (r"\partial", "∂"), (r"\phi", "φ"), (r"\mathrm{PIV}", "PIV")]
 
 
+def short_title(key, length=14):
+    """The text of a quantity on the narrow menu buttons of the tiles: its symbol in plain text (that of the labels of
+    its figure: ū, σ_u, Tu_%...), else its name shortened (the name in full in their tip and their menu)."""
+    if key in WIDGET_SYMBOLS:
+        return WIDGET_SYMBOLS[key]
+    if key in WIDGET_NAMES:
+        return WIDGET_NAMES[key]
+    if key in FIGURE_SYMBOLS:
+        return plain_symbol(f"${FIGURE_SYMBOLS[key]}$")
+    title = COMPARE_TITLES.get(key, key)
+    # Abbreviated: a dot at the end
+    return title if len(title) <= length else title[:length - 1].rstrip() + "."
+
+
 def plain_symbol(symbol):
-    """A symbol of a quantity (LaTeX, with $) in plain text: ū, σ_u, Tu_%..."""
+    """A symbol of a quantity (LaTeX, with $) in plain text, its words capitalised: Mean u, RMS u, Tu_%, ∂(Mean u)/∂y,
+    Med. S/N..."""
     for old, new in PLAIN_SYMBOLS:
         symbol = symbol.replace(old, new)
-    for command, accent in ((r"\overline", "̄"), (r"\widetilde", "̃")):
-        symbol = re.sub(re.escape(command) + r"\{([^}]*)\}", lambda m: re.sub(r"(\w)", r"\1" + accent, m[1], count=1),
-                        symbol)
-    return symbol.replace("{", "").replace("}", "")
+    for command, word in ((r"\overline", "Mean"), (r"\widetilde", "Med.")):
+        # In parentheses after ∂ (a derivative of the mean)
+        symbol = re.sub(r"(∂?)" + re.escape(command) + r"\{([^}]*)\}",
+                        lambda m: f"∂({word} {m[2]})" if m[1] else f"{word} {m[2]}", symbol)
+    for letter, word in (("σ", "RMS"), ("γ", "Skew."), ("β", "Kurt.")):
+        symbol = re.sub(letter + r"_\{?(\w)\}?", rf"{word} \1", symbol)
+    # Without the marks of the indices and of the percentages (Tu_% → Tu, d_x → dx)
+    for mark in ("{", "}", "%", "_", "^"):
+        symbol = symbol.replace(mark, "")
+    return symbol
 
 
-def fov_offsets():
-    return "\n".join(f"FOV {k}: {num2str(v['x_offset_mm'])} mm" for k, v in piv.FOV_PRESETS.items())
+# The quantities whose symbol on the menu buttons of the tiles isn't that of their figures: the turbulence intensity
+# of the fluctuation of each map (a prime), the integral scales (Lt: time; Lx u: of u along x...), the image of the PIV
+WIDGET_SYMBOLS = {"turbulence_intensity_map": "Tu'", "integral_time": "Lt", "integral_length_x": "Lx u",
+                  "integral_length_y": "Ly u", "integral_length_vx": "Lx v", "integral_length_vy": "Ly v",
+                  "ke_time": "Lt k-ε", "ke_length": "L k-ε", "piv_image": "I PIV", "valid": "Valid"}
+# The figures without a symbol on the menu buttons of the tiles: their names abbreviated (a dot at the end of each
+# abbreviation)
+WIDGET_NAMES = {"peak_locking": "Peak locking", "peak_ratio_histogram": "S/N histogram", "convergence": "Convergence",
+                "ptv_tracks": "PTV tracks", "ptv_yield": "Part. tracked", "ptv_track_length": "Track lengths",
+                "ptv_vs_piv": "PTV vs PIV", "pod_spectrum": "POD spectrum", "core_profiles": "Core profiles",
+                "core_centreline": "Core centrel."}
 
 
-# Camera settings, which convert the vector fields of the PIV (in pixels) into mm and m/s: key, label, default, help
+# Camera settings, which convert the vector fields of the PIV (in pixels) into mm and m/s: key (that of the project
+# file: settings.CAMERA_KEYS), label, default, help
 CAMERA_SETTINGS = [
     ("fov_width", "Field of view width (mm)", "",
-     piv.fov_help() + "\n\nThe scale (mm/px) is this width divided by the width of the images in pixels."),
+     "Width of the field of view: the horizontal pixel pitch (mm/px) is this width divided by the width of the images "
+     "in pixels.\n\n" + jet.fov_help()),
+    ("fov_height", "Field of view height (mm)", "",
+     "Height of the field of view: the vertical pixel pitch (mm/px) is this height divided by the height of the "
+     "images in pixels. Empty: the horizontal pitch (square pixels)."),
+    ("x_shift", "Origin of x (fraction of the width)", "0",
+     "Where x = 0 is, from the left edge of the images, as a fraction of the width of the field of view: 0 the left "
+     "edge, 0.5 the middle, 1 the right edge (any number: outside the images too). x upwards to the right."),
+    ("y_shift", "Origin of y (fraction of the height)", "0",
+     "Where y = 0 is, from the bottom edge of the images, as a fraction of the height of the field of view: 0 the "
+     "bottom edge, 0.5 the middle (the jet axis of the jet measurements), 1 the top edge. y upwards. Projects of "
+     "the previous versions: 0.5."),
     ("x_offset", "Horiz. offset of the field of view (mm)", "0",
-     "Position of the left edge of the field of view along the jet: x global = x + offset (12 cm between the "
-     "fields of view of the jet measurements):\n" + fov_offsets()),
+     "Position of the origin of x in the global axes, those of the stitching of fields of view: x global = x + "
+     "offset. The jet measurements (12 cm between the fields of view):\n" + jet.fov_offsets()),
     ("y_offset", "Vert. offset of the field of view (mm)", "0",
-     ("Position of the middle of the height of the field of view: y global = y + offset, with y = 0 at the middle "
-      "of the images. The stitching keeps only the height common to all the fields of view.")),
-    ("frame_rate", "Frame rate (Hz)", num2str(piv.PRESET_FRAME_RATE),
+     ("Position of the origin of y in the global axes: y global = y + offset. The stitching keeps only the height "
+      "common to all the fields of view.")),
+    ("frame_rate", "Frame rate (Hz)", num2str(piv.DEFAULT_FRAME_RATE),
      "Frame rate of the camera; the two images of a pair are consecutive, so dt = 1 / frame rate. "
-     f"{num2str(piv.PRESET_FRAME_RATE)} Hz for the jet measurements (the names of the DynamicStudio exports give "
-     "the time of each image, e.g. 000001-6.6672 = 6.6672 ms = 1 / 150 s)."),
+     f"{num2str(piv.DEFAULT_FRAME_RATE)} Hz by default (times in frames); {num2str(jet.PRESET_FRAME_RATE)} Hz for "
+     "the jet measurements (the names of the DynamicStudio exports give the time of each image, e.g. 000001-6.6672 "
+     "= 6.6672 ms = 1 / 150 s)."),
 ]
+# The camera settings of the side panel and the keys of piv.Camera (the batch settings)
+CAMERA_FIELDS = {key: path for path, key in CAMERA_KEYS.items()}
 # Scale space of the figures
 SPACES = (("sensor", "Sensor (px, pairs)"), ("physical", "Physical (mm, s)"))
 SPACE_HELP = ("Sensor shows the vector fields of the PIV/PTV as they are: positions and displacements in pixels, the "
               "maps numbered by pair, no reference quantities.\n\nPhysical converts them with the camera settings: "
               "positions in mm (or over L_ref), velocities in m/s (or over u_ref), times in s (or in flow times).")
 # The results post-processed by the window Batch
-RESULTS_HELP = ("The results of each project post-processed: those of its PIV (subfolder PIV; those of its PTV if "
-                "it has no PIV results), or of its PTV (subfolder PTV). A project with both is post-processed once "
-                "per batch: run the batch again with the other results for those. The quantities of the PTV are "
-                "exported for the results of a PTV only, to PostProcessing_PTV by default.")
+RESULTS_HELP = ("The results sets of each project exported: those of the velocimetry pipelines checked (PaIRS: "
+                "subfolder PIV, TracTrac: subfolder PTV...) that it has, each with the same settings and quantities, "
+                "to the subfolder of its pipeline in PostProcessing (PostProcessing/PaIRS, PostProcessing/TracTrac). "
+                "A stitching is made for a results set when all the projects of the stitching have it and export it.")
 # Settings of the recipe: section, key, label and help (the reference quantities: REFERENCE_SETTINGS)
 SETTINGS = [
     ("Statistical outlier filtering", "outlier_k", "Drop cell if beyond (σ)",
@@ -100,33 +149,42 @@ SETTINGS = [
      ("Number of bins per pixel of the histograms of |d_x| and |d_y|, odd so that each integer is in the middle "
       "of a bin. The quality 1 - C compares the histogram with its moving average over 1 px: too few bins miss "
       "the peaks at the integers, too many make the bins noisy. 21 in PostProcessing_General_PIV.py.")),
-    ("Jet potential core", "core_level", "Core: mean u ≥ (% of u_ref)",
+    ("Jet theory (add-on)", "core_level", "Core: mean u ≥ (% of u_ref)",
      ("Velocity level detection: the potential core is where the mean u is at least this percentage of the u_ref "
       "of the jet theory (below). Its boundary is that isocontour, closed by the edge of the field where the core "
       "goes beyond it; its centreline is fitted to the middle of its edges, and the core ends at the downstream tip "
       "of the contour. Also used by the skewness detection when no profile meets its criteria.")),
-    ("Jet potential core", "skew_zero", "Skewness ≈ 0 below (% of max)",
+    ("Jet theory (add-on)", "skew_zero", "Skewness ≈ 0 below (% of max)",
      ("Skewness detection: a profile counts as symmetric when its |skewness| is at most this percentage of the "
       "highest |skewness| of the profiles.")),
-    ("Jet potential core", "skew_change", "Skewness change below (% of prev.)",
+    ("Jet theory (add-on)", "skew_change", "Skewness change below (% of prev.)",
      ("Skewness detection: the skewness must also differ from that of the previous profile by at most this "
       "percentage of the previous one's |skewness|. The closer the profiles (more of them), the less they differ.")),
-    ("Jet potential core", "skew_profiles", "Profiles for detection",
+    ("Jet theory (add-on)", "skew_profiles", "Profiles for detection",
      ("Skewness detection: number of profiles analysed, spread from the first profile to the end of the field "
       "(at most one per column of vectors). More of them locate the end of the core more finely.")),
-    ("Jet potential core", "n_stations", "Profiles of mean u/u_ref (stations)",
+    ("Jet theory (add-on)", "n_stations", "Profiles of mean u/u_ref (stations)",
      ("Number of x positions where the profiles of R = mean u / u_ref are shown, with the edges of the core (and "
       "their skewness with the skewness detection).")),
-    ("Jet potential core", "first_offset", "First profile offset (columns)",
+    ("Jet theory (add-on)", "first_offset", "First profile offset (columns)",
      ("Columns of vectors between the exit profile and the first profile of the profiles figure, to stay clear of "
       "the nozzle; the others are spread evenly up to the last one. Empty or 0: the first one at the exit "
       "profile. The velocity level detection doesn't change; the skewness detection starts at the first profile.")),
-    ("Jet potential core", "core_u_ref", "Ref. velocity (m/s)",
+    ("Jet theory (add-on)", "core_u_ref", "Ref. velocity (m/s)",
      ("u_ref of the jet theory figures (mean u / u_ref) when the reference velocity of the Reference quantities "
       "is off; empty: the maximum of the mean u. Greyed when that one is on, since the jet theory then uses it.")),
 ]
+# The settings of the jet theory (hidden when the add-on is off)
+JET_KEYS = {key for section, key, _, _ in SETTINGS if section == "Jet theory (add-on)"}
+JET_THEORY_HELP = ("The jet theory is an add-on, for a jet coming from the left of the field of view (its mean u "
+                   "along +x): the potential core (where the mean u stays near the velocity of the jet), its "
+                   "centreline, its end and the profiles of mean u / u_ref along it (figures Jet theory), with its "
+                   "numbers in metrics.json. Off: those figures aren't drawn nor exported. The rest of the "
+                   "post-processing makes no assumption on the flow.")
 # The boxes inside the box Miscellaneous, before the POD
-MISC_SECTIONS = ("Peak locking", "Jet potential core")
+MISC_SECTIONS = ("Peak locking",)
+# Sections in the box Add-ons, below the box Miscellaneous
+ADDON_SECTIONS = ("Jet theory (add-on)",)
 # The mode of the POD of the images shown (box POD of the box Miscellaneous)
 POD_MODE_HELP = ("Modes of the POD of the images (page Pre-processing, POD modes) exported with the figure POD mode "
                  "(Modal decomposition (POD) in the menus of the tiles): the range between the two handles of the "
@@ -233,52 +291,64 @@ def describe_post(settings):
     except (TypeError, ValueError) as e:
         steps = f"recipe not valid ({e})"
     camera = settings.get("camera")
+    try:
+        described = camera_of(camera).describe() if camera else None
+    except (TypeError, ValueError) as e:
+        described = f"camera not valid ({e})"
     space = ("sensor space" if settings.get("space") == "sensor" else
-             f"physical space, field of view {camera['fov_width_mm']:g} mm, horiz. offset {camera['x_offset_mm']:g} "
-             f"mm, vert. offset {camera.get('y_offset_mm', 0):g} mm, {camera['frame_rate_hz']:g} Hz" if camera
-             else "physical space without camera settings")
+             f"physical space, {described}" if camera else "physical space without camera settings")
     return f"{steps or 'default recipe'}; {space}; {describe_spec(export_spec(settings.get('export')))}"
 
 
 # Labels of the recipe in the window Batch (those of the side panel otherwise)
 BATCH_LABELS = {"use_u_ref": "Velocities over u_ref", "u_ref": "Ref. velocity u_ref (m/s; empty: max of mean u)",
                 "use_t_flow": "Times in flow times", "t_flow": "Flow time t_flow (s; empty: L_FoV / u_ref)",
-                "l_ref": "Ref. length L_ref (mm; empty: positions in mm)", "rolling": "Rolling statistics",
+                "l_ref": "Ref. length L_ref (mm; empty: positions in mm)", "nu": "Kinematic viscosity ν (m²/s)",
+                "rolling": "Rolling statistics",
                 "rolling_maps": "Rolling interval (maps)", "core_u_ref": "Jet theory u_ref (m/s; empty: max of mean u)",
+                "jet_theory": "Jet theory add-on (potential core)",
                 "pod_mode": "POD modes exported (first to last)",
                 "pod_combine": "POD modes summed (the background of each image)"}
 
 
+def batch_maps_folders(project, settings):
+    """The vector fields of a project post-processed by the batch: those of the results sets checked (results) that it
+    has, {label: folder}."""
+    return selected_results(project.results_folders(), settings.get("results"))
+
+
 def batch_maps_folder(project, settings):
-    """The folder of the vector fields of a project post-processed by the batch: those of the results chosen (PIV,
-    PTV), else its maps folder (those of the PTV for a project without PIV results). ValueError for PTV results that
-    it doesn't have."""
-    folders, method = project.results_folders(), settings.get("results") or "PIV"
-    if method == "PTV" and method not in folders:
-        raise ValueError(f"{project.label()}: no PTV results ({os.path.join(piv.PTV_FOLDER, piv.VECTORS_FILE)})")
-    return folders.get(method, project.maps)
+    """The vector fields shown for a project in the window Batch (the maps of its videos...): those of its first
+    results set exported, else its maps folder."""
+    return next(iter(batch_maps_folders(project, settings).values()), None) or project.maps
 
 
 def post_fields(settings):
-    """The fields of the batch settings of the post-processing (window Batch): the results post-processed (PIV,
-    PTV), the scale space, the camera, the recipe and the export folder (the quantities: Quantities...)."""
+    """The fields of the batch settings of the post-processing (window Batch): the results sets exported (the
+    pipelines: PaIRS, TracTrac...), the scale space, the camera, the recipe and the export folder (the quantities: Quantities...)."""
     labels = {key: label for _, key, label, _ in SETTINGS}
     helps = {key: text for _, key, _, text in SETTINGS}
     helps.update({key: text for _, key, _, text in REFERENCE_SETTINGS})
-    helps.update(use_u_ref=helps.get("u_ref"), use_t_flow=helps.get("t_flow"), l_ref=L_REF_HELP,
+    helps.update(use_u_ref=helps.get("u_ref"), use_t_flow=helps.get("t_flow"), l_ref=L_REF_HELP, nu=NU_HELP,
                  rolling=ROLLING_HELP, pod_mode=POD_MODE_HELP)
     camera = {key: help_ for key, _, _, help_ in CAMERA_SETTINGS}
-    fields = [Field(("results",), "Results", "choice", (("PIV", "PIV (PTV without PIV results)"), ("PTV", "PTV")),
-                    default="PIV", help=RESULTS_HELP),
+    fields = [Field(("results",), "Results sets exported", "multi", tuple((label, label) for label in pipelines()),
+                    default=list(pipelines()), help=RESULTS_HELP),
               Field(("space",), "Scale space", "choice", tuple((k, label) for k, label in SPACES), default="physical",
                     help=SPACE_HELP),
               Field(("camera", "fov_width_mm"), "Field of view width (mm; empty: sensor space only)", "optional",
                     help=camera["fov_width"]),
+              Field(("camera", "fov_height_mm"), "Field of view height (mm; empty: square pixels)", "optional",
+                    help=camera["fov_height"]),
+              Field(("camera", "x_shift"), "Origin of x (fraction of the width)", "float", default=0.0,
+                    help=camera["x_shift"]),
+              Field(("camera", "y_shift"), "Origin of y (fraction of the height)", "float", default=0.0,
+                    help=camera["y_shift"]),
               Field(("camera", "x_offset_mm"), "Horiz. offset of the field of view (mm)", "float", default=0.0,
                     help=camera["x_offset"]),
               Field(("camera", "y_offset_mm"), "Vert. offset of the field of view (mm)", "float", default=0.0,
                     help=camera["y_offset"]),
-              Field(("camera", "frame_rate_hz"), "Frame rate (Hz)", "float", default=piv.PRESET_FRAME_RATE,
+              Field(("camera", "frame_rate_hz"), "Frame rate (Hz)", "float", default=piv.DEFAULT_FRAME_RATE,
                     help=camera["frame_rate"])]
     defaults = PostSettings()
     for f in dataclass_fields(PostSettings):
@@ -299,10 +369,9 @@ def post_fields(settings):
         fields.append(Field(("settings", f.name), BATCH_LABELS.get(f.name) or labels.get(f.name) or f.name, kind,
                             help=helps.get(f.name), default=default))
     return fields + [Field(("export_folder",), "Export Path (Relative)", "folder", default=POSTPROCESSING_FOLDER,
-                           help=("Folder of the figures exported, relative to each project (↺: PostProcessing, "
-                                 "PostProcessing_PTV for the results of a PTV: PostProcessing is that of the "
-                                 "PIV only). "
-                                 "Set per project, not on folders."), project_only=True)]
+                           help=("Folder of the figures exported, relative to each project (↺: the subfolder of "
+                                 "the pipeline of the results in PostProcessing: PostProcessing/PaIRS, "
+                                 "PostProcessing/TracTrac). Set per project, not on folders."), project_only=True)]
 
 
 # Where the statistical outlier filtering is used (below its settings)
@@ -328,6 +397,8 @@ ROLLING_HELP = ("Computes the statistics of each map over the interval of maps u
                 "filtering still use all the maps; the titles give the maps used.")
 # Maximum of the slider of the interval of the rolling statistics before vector fields are read (then: their maps)
 ROLLING_MAX = 1000
+NU_HELP = ("Kinematic viscosity of the fluid, for the dissipation ε of the k-ε time and length scales (Turbulence). "
+           "Air: 1.5e-5 m²/s, water: 1.0e-6 m²/s (at 20 °C). Air by default.")
 L_REF_HELP = ("The positions are shown as x / L_ref and y / L_ref, with its value in the titles. The nozzle "
               "diameter: 50 mm for the jet measurements. Empty: positions in mm.")
 
@@ -343,7 +414,7 @@ def format_setting(key, value):
 
 class PostPanel(SidePanel):
     """Side panel of the post-processing: the vector fields, the scale space, the camera settings and the recipe
-    (statistical outlier filtering, reference quantities, peak locking, jet potential core, miscellaneous). The button
+    (statistical outlier filtering, reference quantities, peak locking, jet theory add-on, miscellaneous). The button
     that exports the figures is at the bottom. batch: the settings of the window Batch (BatchPostForm), without the
     vector fields nor the export, nor the preferences; page: what is told of the changes (apply_settings,
     camera_changed, space_changed, describe_rolling, pod_handle)."""
@@ -385,6 +456,14 @@ class PostPanel(SidePanel):
                     box = self.section(section, self.misc)
                     box.pack_configure(pady=(0, 6))
                     grids[section] = self.grid(box)
+                elif section in ADDON_SECTIONS:
+                    # Inside the box Add-ons, below the box Miscellaneous (its POD first)
+                    if not hasattr(self, "addons"):
+                        self.misc_box(settings)
+                        self.addons = self.section("Add-ons")
+                    box = self.section(section, self.addons)
+                    box.pack_configure(pady=(0, 6))
+                    grids[section] = self.grid(box)
                 else:
                     grids[section] = self.grid(self.section(section))
                 if section == "Statistical outlier filtering":
@@ -396,7 +475,10 @@ class PostPanel(SidePanel):
                     # The average delay of the invalid cells filled, below the setting (when there is one)
                     self.hold_label = ttk.Label(grids[section].master, foreground="#555555", wraplength=wrap,
                                                 justify=tk.LEFT)
-                if section == "Jet potential core":
+                if section == "Jet theory (add-on)":
+                    # Its toggle, its settings below (hidden when it is off)
+                    self.jet_row(grids[section], settings)
+                    grids[section] = self.jet_settings = self.grid(grids[section].master)
                     self.core_mode_row(grids[section], settings)
             self.vars[key] = tk.StringVar(self, format_setting(key, getattr(settings, key)))
             entry = self.setting(grids[section], label, self.vars[key], help, command=page.apply_settings)
@@ -404,9 +486,12 @@ class PostPanel(SidePanel):
                 self.core_u_ref_entry = entry
             if key in ("core_level", "skew_zero", "skew_change", "skew_profiles"):
                 self.core_entries[key] = entry
+            if key in JET_KEYS:
+                self.jet_entries[key] = entry
         self.update_core_u_ref()
         self.update_core_mode()
-        self.misc_box(settings)
+        if not hasattr(self, "pod_slider"):
+            self.misc_box(settings)
 
     def export_and_maps(self, page):
         """The export at the bottom (folder, quantities, buttons) and the vector fields at the top (the maps
@@ -414,8 +499,8 @@ class PostPanel(SidePanel):
         wrap = self.wrap
         footer = self.section("Export", self.footer,
                               ("Exports the quantities chosen (Quantities...; all the figures by default) as PNG "
-                               "to the subfolder PostProcessing of the measurement (PostProcessing_PTV for the "
-                               "results of a PTV: those of a PIV of the same measurement aren't overwritten), named "
+                               "to the subfolder of the pipeline of the results in PostProcessing "
+                               "(PostProcessing/PaIRS, PostProcessing/TracTrac: the pipelines side by side), named "
                                "[project]_PostProcessing_[figure] (with the map number for the instantaneous "
                                "figures), with metrics.json and postprocessing.json. Instantaneous figures of "
                                "several maps get a folder per figure, and videos (GIF or MP4) if chosen. ... "
@@ -451,7 +536,7 @@ class PostPanel(SidePanel):
         self.maps_label.pack(anchor=tk.W, pady=(4, 0))
 
     def misc_box(self, settings):
-        """Box POD of the box Miscellaneous (below the peak locking and the jet potential core): the modes of the POD
+        """Box POD of the box Miscellaneous (below the peak locking): the modes of the POD
         of the images exported (a two-sided slider, from 1 to the modes evaluated: the first and the last ones), each
         exported alone or summed (the background of the image of each map), the POD and the images found below."""
         if not hasattr(self, "misc"):
@@ -501,6 +586,15 @@ class PostPanel(SidePanel):
         for button in self.pod_buttons:
             button.state(["!disabled"] if modes else ["disabled"])
 
+    def jet_row(self, grid, settings):
+        """The toggle of the jet theory add-on: its figures, its numbers and its settings below."""
+        self.jet_theory = tk.BooleanVar(self, settings.jet_theory)
+        self.jet_entries, self.core_buttons = {}, []
+        ttk.Checkbutton(grid, text="Jet theory add-on", variable=self.jet_theory,
+                        command=self.core_mode_changed).grid(row=grid.grid_size()[1], column=0, columnspan=2,
+                                                             sticky=tk.W, pady=(0, 2))
+        HelpDot(grid, JET_THEORY_HELP).grid(row=grid.grid_size()[1] - 1, column=2, padx=(4, 0))
+
     def core_mode_row(self, grid, settings):
         """Row of the detection of the potential core: velocity level or skewness."""
         self.core_mode = tk.StringVar(self, settings.core_mode)
@@ -509,8 +603,10 @@ class PostPanel(SidePanel):
         row.grid(row=grid.grid_size()[1], column=0, columnspan=2, sticky=tk.W, pady=(0, 2))
         ttk.Label(row, text="Detection").pack(side=tk.LEFT, padx=(0, 8))
         for value, text in CORE_MODE_LABELS:
-            ttk.Radiobutton(row, text=text, value=value, variable=self.core_mode,
-                            command=self.core_mode_changed).pack(side=tk.LEFT, padx=(0, 8))
+            button = ttk.Radiobutton(row, text=text, value=value, variable=self.core_mode,
+                                     command=self.core_mode_changed)
+            button.pack(side=tk.LEFT, padx=(0, 8))
+            self.core_buttons.append(button)
         HelpDot(grid, CORE_MODE_HELP).grid(row=grid.grid_size()[1] - 1, column=2, padx=(4, 0))
 
     def core_mode_changed(self):
@@ -518,10 +614,20 @@ class PostPanel(SidePanel):
         self.page.apply_settings()
 
     def update_core_mode(self):
-        """The settings of the detection not chosen greyed out."""
+        """The settings of the jet theory hidden when it is off, those of the detection not chosen greyed out."""
+        on = self.jet_theory.get()
+        if on and not self.jet_settings.winfo_manager():
+            self.jet_settings.pack(fill=tk.X)
+        elif not on:
+            self.jet_settings.pack_forget()
         skewness = self.core_mode.get() == "skewness"
-        for key, entry in self.core_entries.items():
-            entry.configure(state=tk.NORMAL if (key != "core_level") == skewness else tk.DISABLED)
+        for key, entry in self.jet_entries.items():
+            used = key not in self.core_entries or (key != "core_level") == skewness
+            entry.configure(state=tk.NORMAL if on and used else tk.DISABLED)
+        for button in self.core_buttons:
+            button.state(["!disabled"] if on else ["disabled"])
+        if on and hasattr(self, "core_u_ref_entry"):
+            self.update_core_u_ref()
 
     def rolling_box(self, settings):
         """Box of the rolling statistics: its toggle (off by default), the interval (maps: slider and entry) and its
@@ -571,8 +677,10 @@ class PostPanel(SidePanel):
         """The reference velocity of the jet theory: its own entry when the one of the reference quantities is off,
         else greyed out showing that one (greyed out too in the sensor space, where it isn't used)."""
         shared = self.uses["use_u_ref"].get()
+        off = not self.jet_theory.get()
         self.core_u_ref_entry.configure(textvariable=self.vars["u_ref" if shared else "core_u_ref"],
-                                        state=tk.DISABLED if shared or self.space.get() == "sensor" else tk.NORMAL)
+                                        state=tk.DISABLED if off or shared or self.space.get() == "sensor"
+                                        else tk.NORMAL)
 
     def space_box(self):
         """Box of the scale space: the vector fields of the PIV in pixels, or converted with the camera settings."""
@@ -615,6 +723,9 @@ class PostPanel(SidePanel):
         self.vars["l_ref"] = tk.StringVar(self, format_setting("l_ref", settings.l_ref))
         self.reference_widgets.append(self.setting(grid, "Ref. Length (mm)", self.vars["l_ref"], L_REF_HELP,
                                                    command=self.page.apply_settings))
+        self.vars["nu"] = tk.StringVar(self, format_setting("nu", settings.nu))
+        self.reference_widgets.append(self.setting(grid, "Kin. viscosity ν (m²/s)", self.vars["nu"], NU_HELP,
+                                                   command=self.page.apply_settings))
         self.reference_label = ttk.Label(box, foreground="#555555", wraplength=self.wrap, justify=tk.LEFT)
         self.reference_label.pack(anchor=tk.W, pady=(4, 0))
         self.show_reference_entries()
@@ -653,17 +764,17 @@ class PostPanel(SidePanel):
         if not c["fov_width"].get().strip():
             return None
         try:
-            return piv.Camera(float(c["fov_width"].get()), float(c["x_offset"].get() or 0),
-                              float(c["frame_rate"].get()), y_offset_mm=float(c["y_offset"].get() or 0))
+            return camera_of({path: float(c[key].get()) for key, path in CAMERA_FIELDS.items()
+                              if c[key].get().strip()})
         except ValueError as e:
             raise ValueError(f"Camera settings: {e}") from None
 
     def camera_settings(self):
         return {key: var.get() for key, var in self.camera.items()}
 
-    def update_camera_label(self, width, n_images=None):
-        """Scale, time between the images of a pair and final time of the image set (width: of the images in
-        pixels, n_images: their number; None if unknown)."""
+    def update_camera_label(self, width, n_images=None, height=None):
+        """Pixel pitches, time between the images of a pair and final time of the image set (width, height: of the
+        images in pixels, n_images: their number; None if unknown)."""
         try:
             camera = self.read_camera()
         except ValueError as e:
@@ -674,8 +785,12 @@ class PostPanel(SidePanel):
                                          "pixels, converted into mm and m/s with these settings.")
             return
         parts = []
-        if width:
-            parts.append(f"Scale {camera.scale(width):.5f} mm/px (images {width}px wide)")
+        if width and camera.fov_height_mm and height:
+            parts.append(f"Pixel pitches {camera.scale(width):.5f} x {camera.scale_y(width, height):.5f} mm/px "
+                         f"(images {width} x {height} px)")
+        elif width:
+            parts.append(f"Pixel pitch {camera.scale(width):.5f} mm/px (images {width}px wide"
+                         + (", square pixels)" if not camera.fov_height_mm else ")"))
         parts.append(f"Δt = {camera.dt * 1000:.4g} ms between the images of a pair")
         if n_images:
             parts.append(f"Final time of the image set: {(n_images - 1) / camera.frame_rate_hz:.4g} s "
@@ -702,8 +817,8 @@ class PostPanel(SidePanel):
         # The flow time entered in ms
         if values["t_flow"] is not None:
             values["t_flow"] /= 1000
-        return PostSettings(rolling=self.rolling.get(), core_mode=self.core_mode.get(),
-                            pod_combine=self.pod_combine.get(), **values)
+        return PostSettings(rolling=self.rolling.get(), jet_theory=self.jet_theory.get(),
+                            core_mode=self.core_mode.get(), pod_combine=self.pod_combine.get(), **values)
 
     def show(self, settings):
         for key, var in self.vars.items():
@@ -712,6 +827,7 @@ class PostPanel(SidePanel):
         self.rolling_scale.set(settings.rolling_maps)
         self.pod_slider.set(settings.pod_mode, settings.pod_mode_last or settings.pod_mode)
         self.pod_combine.set(settings.pod_combine)
+        self.jet_theory.set(settings.jet_theory)
         self.core_mode.set(settings.core_mode)
         self.update_core_mode()
         for use, var in self.uses.items():
@@ -728,10 +844,11 @@ class PostPanel(SidePanel):
 PANEL_PATHS = ("space", "camera", "settings")
 PANEL_LABELS = {**{label: [("settings", key)] for _, key, label, _ in SETTINGS},
                 **{label: [("settings", use), ("settings", key)] for use, key, label, _ in REFERENCE_SETTINGS},
-                **{label: [("camera", path)] for (_, label, _, _), path in
-                   zip(CAMERA_SETTINGS, ("fov_width_mm", "x_offset_mm", "y_offset_mm", "frame_rate_hz"))},
-                "Ref. Length (mm)": [("settings", "l_ref")], "Rolling statistics": [("settings", "rolling")],
+                **{label: [("camera", CAMERA_FIELDS[key])] for key, label, _, _ in CAMERA_SETTINGS},
+                "Ref. Length (mm)": [("settings", "l_ref")], "Kin. viscosity ν (m²/s)": [("settings", "nu")],
+                "Rolling statistics": [("settings", "rolling")],
                 "Interval (maps)": [("settings", "rolling_maps")], "Detection": [("settings", "core_mode")],
+                "Jet theory add-on": [("settings", "jet_theory")],
                 "Scale space": [("space",)], "POD modes": [("settings", "pod_mode"), ("settings", "pod_mode_last")],
                 "Export": [("settings", "pod_combine")]}
 class BatchPage:
@@ -769,11 +886,11 @@ class BatchPostForm(PanelForm):
         panel.show(recipe)
         panel.space.set(settings.get("space") or "physical")
         camera = settings.get("camera") or {}
-        for key, path in zip(("fov_width", "x_offset", "y_offset", "frame_rate"),
-                             ("fov_width_mm", "x_offset_mm", "y_offset_mm", "frame_rate_hz")):
-            value = camera.get(path, None if key == "fov_width" else
-                               piv.PRESET_FRAME_RATE if key == "frame_rate" else 0)
-            panel.camera[key].set("" if value is None else num2str(value))
+        defaults = {key: default for key, _, default, _ in CAMERA_SETTINGS}
+        for key, path in CAMERA_FIELDS.items():
+            value = camera.get(path)
+            panel.camera[key].set(defaults[key] if value is None and path != "fov_width_mm" and key != "fov_height"
+                                  else "" if value is None else num2str(value))
         panel.update_camera_label(None)
         if unavailable is not None:
             reason = unavailable.get(("settings", "pod_mode"))
@@ -800,10 +917,7 @@ class BatchPostForm(PanelForm):
         camera = panel.read_camera()
         self.panel.page.pod_handle = None  # The mode shown: the page's only
         return {"space": panel.space.get(), "settings": settings_record(recipe),
-                "camera": None if camera is None else {"fov_width_mm": camera.fov_width_mm,
-                                                       "x_offset_mm": camera.x_offset_mm,
-                                                       "y_offset_mm": camera.y_offset_mm,
-                                                       "frame_rate_hz": camera.frame_rate_hz}}
+                "camera": None if camera is None else camera_record(camera)}
 
 
 OVERWRITE = "Overwrite all"
@@ -856,6 +970,7 @@ class PostProcessingPage(Page):
         self.post = None  # PostProcessing of the vector fields loaded
         self.index = 0  # Map of the instantaneous figures
         self.loaded = None  # Folder of the vector fields read (None: to be read when the page is shown)
+        self.loaded_camera = None  # The camera settings they were read with
         self.calibration = {}  # Time between the images (s) and scale (mm/px) of the folders of CSV exports
         self.export_choice = export_choice(getpref("post_export"))  # The figures to export (quantities)
         # The settings of the videos of the tiles, by main quantity (VideoDialog): the same for all its tiles
@@ -893,13 +1008,17 @@ class PostProcessingPage(Page):
                 # The parameters of the figures by quantity (those of the page)
                 tile.clims, tile.cmaps, tile.contours = self.clims, self.cmaps, self.contours
                 # Menu of the figures: a submenu per group of quantities
+                # (narrow: the symbol of the quantity, its name in the menu and in the tip of the button)
                 tile.selector = FigureSelector(tile.bar, FIGURE_GROUPS, FIGURE_TITLES,
-                                               lambda key, tile=tile: self.view_selected(tile, key))
-                tile.selector.pack(side=tk.LEFT, padx=(2, 6), before=tile.toolbar)
+                                               lambda key, tile=tile: self.view_selected(tile, key), width=14,
+                                               parents=MENU_PARENTS, short=short_title)
+                tile.selector.pack(side=tk.LEFT, padx=(2, 4), before=tile.toolbar)
                 # Menu of the second quantity: the maps
                 tile.selector2 = FigureSelector(tile.bar, COMPARE_GROUPS, COMPARE_TITLES,
-                                                lambda key, tile=tile: self.view2_selected(tile, key), width=22)
-                tile.selector2.pack(side=tk.LEFT, padx=(0, 6), before=tile.toolbar)
+                                                lambda key, tile=tile: self.view2_selected(tile, key), width=10,
+                                                parents=MENU_PARENTS,
+                                                short=lambda key: "Compare" if key == NO_COMPARISON else short_title(key))
+                tile.selector2.pack(side=tk.LEFT, padx=(0, 4), before=tile.toolbar)
                 # Colour map of the figure (the one of the figure by default), next to its colour range
                 tile.cmap_box = colour_tools(tile.bar, tile.toolbar,
                                              lambda cmap, tile=tile: self.cmap_selected(tile, cmap),
@@ -907,10 +1026,14 @@ class PostProcessingPage(Page):
                 # Isocontour of the map shown: its value for each figure ({key: value}), toggled in the bar, chosen
                 # with the slider below the figure (in the colour range of the map)
                 tile.contour_sets = []
+                # The x-y cursor of its maps (a left click freezes it), the value on the side of the wiper
+                tile.cursor = MapCursor(tile.canvas, tile.toolbar,
+                                        side=lambda tile=tile: tile.fraction if tile.view2 is not None else None)
                 tile.contour_var = tk.BooleanVar(self, False)
-                tile.contour_check = ttk.Checkbutton(tile.bar, text="Isocontour", variable=tile.contour_var,
+                tile.contour_check = ttk.Checkbutton(tile.bar, text="Contour", variable=tile.contour_var,
                                                      command=lambda tile=tile: self.contour_toggled(tile))
-                tile.contour_check.pack(side=tk.LEFT, padx=(0, 6), before=tile.toolbar)
+                tile.contour_check.pack(side=tk.LEFT, padx=(0, 4), before=tile.toolbar)
+                hover_tip(tile.contour_check, "Isocontour of the map, its value chosen with the slider below it")
                 tile.contour_bar = ttk.Frame(tile, padding=(8, 2, 8, 0))
                 ttk.Label(tile.contour_bar, text="Isocontour").pack(side=tk.LEFT)
                 tile.contour_value = ttk.Label(tile.contour_bar, width=17, anchor=tk.E)
@@ -919,8 +1042,9 @@ class PostProcessingPage(Page):
                                                 command=lambda value, tile=tile: self.contour_slid(tile, float(value)))
                 tile.contour_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
                 # Video of what the tile shows over the maps: only for the instantaneous figures (show_selectors)
-                tile.video_button = tk.Button(tile.bar, text="Video...",
+                tile.video_button = tk.Button(tile.bar, text="Video",
                                               command=lambda tile=tile: self.export_video(tile))
+                hover_tip(tile.video_button, "Video of what the tile shows over the maps...")
                 tile.show_compare(False)
                 row.add(tile, weight=1)
                 self.tiles.append(tile)
@@ -988,9 +1112,11 @@ class PostProcessingPage(Page):
             self.panel.update_reference_state()
         camera = data.get("camera")
         if isinstance(camera, dict):
+            if camera.get("fov_width") and "y_shift" not in camera:
+                camera = {**camera, "y_shift": "0.5"}  # Saved by a previous version: y = 0 at the middle
+            defaults = {key: default for key, _, default, _ in CAMERA_SETTINGS}
             for key, var in self.panel.camera.items():
-                if key in camera:
-                    var.set(camera[key])
+                var.set(camera[key] if key in camera else defaults[key])
         views = data.get("views") or []
         if len(views) == len(self.tiles) and all(v in FIGURE_TITLES for v in views):
             for tile, view in zip(self.tiles, views):
@@ -1037,17 +1163,19 @@ class PostProcessingPage(Page):
     # ------------------------------------------------------------------ vector fields
 
     def default_maps_folder(self):
-        """The results of the project post-processed by default, whatever the method chosen in the page PIV/PTV:
-        those of its PIV (subfolder PIV), else of its PTV (subfolder PTV), else those of the results folder of the page
-        PIV/PTV (a folder of its own); without any, that folder (or the subfolder PIV of the project)."""
+        """The results of the project post-processed by default, whatever the engine chosen in the page Velocimetry: those
+        of the default pipeline, else of the first pipeline it has (pipelines.chosen_results), else those of the
+        results folder of the page Velocimetry (a folder of its own); without any, that folder (or the subfolder PIV of the
+        project)."""
         piv_page = self.app.page("piv")
         output = piv_page.output_folder() if piv_page is not None else None
         root = self.app.project_folder()
-        candidates = [os.path.join(root, piv.PIV_FOLDER), os.path.join(root, piv.PTV_FOLDER)] if root else []
-        for folder in candidates + ([output] if output else []):
-            if os.path.isfile(os.path.join(folder, piv.VECTORS_FILE)):
-                return folder
-        return output or (candidates[0] if candidates else None)
+        found = chosen_results(results_folders(root)) if root else None
+        if found:
+            return found
+        if output and os.path.isfile(os.path.join(output, piv.VECTORS_FILE)):
+            return output
+        return output or (os.path.join(root, piv.PIV_FOLDER) if root else None)
 
     def any_results(self):
         """A project of the workspace has PIV/PTV results (or the project open, without workspace)."""
@@ -1061,8 +1189,8 @@ class PostProcessingPage(Page):
         return self.panel.maps.get()
 
     def default_export_folder(self):
-        """Default export folder: the subfolder PostProcessing of the folder of the measurement, PostProcessing_PTV
-        for the results of a PTV (those of a PIV of the same measurement not overwritten)."""
+        """Default export folder: the subfolder of the pipeline of the vector fields in the subfolder PostProcessing of
+        the folder of the measurement (PostProcessing/PaIRS, PostProcessing/TracTrac)."""
         root = self.measurement_folder()
         panel = getattr(self, "panel", None)
         maps = panel.maps.get() if panel is not None and hasattr(panel, "maps") else None
@@ -1083,6 +1211,8 @@ class PostProcessingPage(Page):
         time between the images and scale are asked once)."""
         app = self.app
         folder = self.loaded = self.maps_folder()
+        # The camera settings they are read with (camera_changed)
+        self.loaded_camera = self.panel.camera_settings()
         self.post = None
         message = None
         csv = sorted(glob.glob(os.path.join(folder, "*.csv"))) if folder and os.path.isdir(folder) else []
@@ -1109,14 +1239,15 @@ class PostProcessingPage(Page):
                 try:
                     with app.progress("Reading the vector fields") as wh:
                         wh(0, folder)
-                        fields = (load_csv_folder(folder, *calibration, progress=wh) if calibration is not None
+                        fields = (load_csv_folder(folder, *calibration, progress=wh,
+                                                  frame_rate_hz=self.csv_frame_rate()) if calibration is not None
                                   else load_vectors(os.path.join(folder, piv.VECTORS_FILE), camera=camera,
                                                     pixels=not physical))
                 except (OSError, ValueError, KeyError) as e:
                     message = f"The vector fields could not be read: {e}"
                 else:
-                    width = fields.settings.get("image_px", [None])[0]
-                    self.panel.update_camera_label(width or self.image_width(), self.image_count(fields))
+                    width, height = fields.settings.get("image_px") or self.image_size()
+                    self.panel.update_camera_label(width, self.image_count(fields), height)
                     self.panel.rolling_range(fields.n)
                     if fields.settings.get("units") == "px" and physical:
                         message = (f"The vector fields of the PIV/PTV are in pixels ({fields.n} maps): enter the camera "
@@ -1161,16 +1292,20 @@ class PostProcessingPage(Page):
         if self.loaded is None:
             self.load_maps()
 
-    def image_width(self):
-        """Width of the images of the first page (px), None without images."""
+    def image_size(self):
+        """Width and height of the images of the first page (px), (None, None) without images."""
         paths = getattr(self.app.source, "images", None) if self.app.source is not self else None
         if not paths:
-            return None
+            return None, None
         try:
             with Image.open(paths[0]) as im:
-                return im.size[0]
+                return im.size
         except OSError:
-            return None
+            return None, None
+
+    def image_width(self):
+        """Width of the images of the first page (px), None without images."""
+        return self.image_size()[0]
 
     def image_count(self, fields=None):
         """Number of images of the set: those of the first page, or of the pairs of the vector fields (None if
@@ -1192,13 +1327,17 @@ class PostProcessingPage(Page):
         self.app.save_project()
 
     def camera_changed(self):
-        """Camera settings entered: the vector fields are read again with them."""
+        """Camera settings entered: the vector fields are read again with them. Nothing to do when they are those the
+        vector fields were read with (the entry left without a change: reading them shows a progress window, which
+        takes the focus from the entry, and its <FocusOut> would read them again, endlessly)."""
+        if self.loaded is not None and self.panel.camera_settings() == self.loaded_camera:
+            return
         setpref("post_camera", self.panel.camera_settings())
         self.loaded = None
         if self.app.current_page() == self.key:
             self.shown()
         else:
-            self.panel.update_camera_label(self.image_width(), self.image_count())
+            self.panel.update_camera_label(*self.image_size()[:1], self.image_count(), self.image_size()[1])
         self.app.save_project()
 
     def ask_calibration(self):
@@ -1227,6 +1366,15 @@ class PostProcessingPage(Page):
                        "warn")
             return None
 
+    def csv_frame_rate(self):
+        """The frame rate of the camera settings (the time between the maps of DynamicStudio CSV exports whose names
+        don't give it), None if it isn't entered."""
+        try:
+            camera = self.panel.read_camera()
+        except ValueError:
+            return None
+        return camera.frame_rate_hz if camera is not None else None
+
     def images_changed(self):
         """New training images: the vector fields of their maps folder are read when the page is shown."""
         self.panel.maps.refresh()
@@ -1240,7 +1388,7 @@ class PostProcessingPage(Page):
         """The page is shown: the vector fields of the maps folder are read if they aren't; the map of the image
         looked at in the other pages is shown."""
         self.panel.maps.refresh()
-        self.panel.update_camera_label(self.image_width(), self.image_count())
+        self.panel.update_camera_label(*self.image_size()[:1], self.image_count(), self.image_size()[1])
         if self.loaded is None or not same_path(self.loaded, self.maps_folder() or ""):
             self.load_maps()
         elif self.post is not None and self.map_of_image() != self.index:
@@ -1316,6 +1464,10 @@ class PostProcessingPage(Page):
             tiles = [t for t in self.tiles if {t.view, t.view2} & imaging.POD_FIGURES] if only_pod else None
             if tiles is None or tiles:
                 self.redraw(tiles)
+        else:
+            # The menus of the figures follow the add-ons turned on or off
+            for tile in self.tiles:
+                self.show_selectors(tile)
         self.update_panel()
         self.app.save_project()
 
@@ -1339,7 +1491,7 @@ class PostProcessingPage(Page):
         panel.batch_button.configure(state=tk.NORMAL if self.any_results() else tk.DISABLED)
         if self.post is None:
             panel.maps_label["text"] = message or (
-                "No vector fields: run the PIV/PTV (page PIV/PTV), or choose a folder of vector fields."
+                "No vector fields: run the PIV/PTV (page Velocimetry), or choose a folder of vector fields."
                 if self.loaded is None else panel.maps_label["text"])
             return
         panel.maps_label["text"] = describe_fields(self.post.fields)
@@ -1546,7 +1698,7 @@ class PostProcessingPage(Page):
         from ..settings import export_spec
 
         spec = QuantitiesDialog(self.app.parent(), export_spec(self.export_spec()), rolling=self.panel.rolling.get(),
-                                post=self.post).run()
+                                post=self.post, jet=self.jet_theory_on()).run()
         if spec is not None:
             self.set_export_spec(spec)
 
@@ -1564,10 +1716,7 @@ class PostProcessingPage(Page):
         root = self.app.project_folder()
         folder = self.export_folder()
         return {"settings": settings_record(settings), "space": self.panel.space.get(),
-                "camera": None if camera is None else {"fov_width_mm": camera.fov_width_mm,
-                                                       "x_offset_mm": camera.x_offset_mm,
-                                                       "y_offset_mm": camera.y_offset_mm,
-                                                       "frame_rate_hz": camera.frame_rate_hz},
+                "camera": None if camera is None else camera_record(camera),
                 "export_folder": os.path.relpath(folder, root) if root and folder else None,
                 "export": self.export_spec()}
 
@@ -1581,17 +1730,14 @@ class PostProcessingPage(Page):
         # reason without POD, modes of the POD evaluated)}
         states = {}
 
-        def project_state(project, settings):
+        def dataset_state(maps, settings):
             """(PTV, why each figure of the images and of the POD can't be exported ({key: reason, None if it
-            can}), why the project has no POD (None: it has one), the modes of its POD evaluated (None: none)) of a
-            project with its batch settings; None if its vector fields are unknown."""
-            if project is None or not project.results:
-                return None
+            can}), why there is no POD (None: there is one), the modes of the POD evaluated (None: none)) of the
+            vector fields of a folder with the batch settings of their project; None if they are unknown."""
             from ..batch_run import post_inputs
 
             try:
-                maps, _, recipe = post_inputs(project.folder,
-                                              {**settings, "maps_folder": batch_maps_folder(project, settings)})
+                _, _, recipe = post_inputs(os.path.dirname(maps), {**settings, "maps_folder": maps})
                 vectors = os.path.join(maps, piv.VECTORS_FILE)
                 signature = (os.path.normcase(os.path.abspath(vectors)), os.path.getmtime(vectors), recipe.pod_mode)
             except (OSError, ValueError, KeyError, TypeError):
@@ -1602,82 +1748,71 @@ class PostProcessingPage(Page):
                                      imaging.availability(vectors, 1)["pod_mode"], imaging.pod_modes(vectors))
             return states[signature]
 
+        def project_state(project, settings):
+            """The states of the results sets exported of a project with its batch settings (dataset_state), [] if
+            unknown."""
+            if project is None or not project.results:
+                return []
+            return [s for s in (dataset_state(maps, settings)
+                                for maps in batch_maps_folders(project, settings).values()) if s is not None]
+
         def node_state(items):
-            """The projects of a node ([(project, settings)]): (one is a PTV (None: unknown), {key: reason} of the
-            figures of the images and of the POD that none of them can export, why none has a POD (None: one
-            has), the most modes of their POD evaluated (None: none))."""
-            known = [s for s in (project_state(p, settings) for p, settings in items) if s is not None]
+            """The projects of a node ([(project, settings)]), over their results sets exported: (one is a PIV, one
+            is a PTV (None: unknown), {key: reason} of the figures of the images and of the POD that none of them can
+            export, why none has a POD (None: one has), the most modes of their POD evaluated (None: none))."""
+            known = [s for p, settings in items for s in project_state(p, settings)]
             if not known:
-                return None, {}, None, None
+                return None, None, {}, None, None
 
             def none_of(reasons):
                 if not all(reasons):
                     return None
-                return reasons[0] if len(reasons) == 1 else f"none of the {len(reasons)} projects: {reasons[0]}"
+                return reasons[0] if len(reasons) == 1 else f"none of the {len(reasons)} results: {reasons[0]}"
             missing = {key: none_of([s[1][key] for s in known]) for key in imaging.FIGURE_FILES}
-            return (any(s[0] for s in known), {k: r for k, r in missing.items() if r},
+            return (any(not s[0] for s in known), any(s[0] for s in known), {k: r for k, r in missing.items() if r},
                     none_of([s[2] for s in known]), max((s[3] for s in known if s[3]), default=None))
 
         def unavailable(items):
             """The POD modes greyed out when none of the projects of the node has a POD."""
-            reason = node_state(items)[2]
+            reason = node_state(items)[3]
             return {("settings", "pod_mode"): reason, ("settings", "pod_combine"): reason} if reason else None
 
         def limits(items):
             """The range of the POD modes: up to the most modes evaluated by the projects of the node."""
-            modes = node_state(items)[3]
+            modes = node_state(items)[4]
             return {("settings", "pod_mode"): (1, modes)} if modes else None
 
         class Quantities(QuantitiesEditor):
-            """The quantities of the node selected (its export specification), in a column of the window Batch: the
-            videos of every figure with rolling statistics, the maps of the videos and of the export described with
-            the vector fields of its project (context); a button gives them those of the project open."""
+            """The quantities of the node selected (its export specification), in a narrow column of the window Batch
+            (the parameters and the global settings below the quantities, in tabs): the videos of every figure with
+            rolling statistics, the maps of the videos and of the export described with the vector fields of its
+            project (context); compared with the quantities of the project open (the reference of all the nodes)."""
 
             def __init__(self, master, on_change):
-                super().__init__(master, export_spec(None), on_change=on_change, height=11)
+                super().__init__(master, export_spec(None), on_change=on_change, height=12, stacked=True)
                 self.loaded = None  # (key of the vector fields and settings, PostProcessing)
-                self.node = None  # (PTV, {key: reason}) of all the projects of the node selected
-                # Those of the project open or of the stitch reference after Check all and Uncheck all (not the
-                # reset of all of them to the default)
-                row = self.reset_button.master
-                self.reset_button.pack_forget()
-                self.same_button = ttk.Button(row, text="Same as the open project", command=self.same_as_open)
-                # Those of the reference of the stitching of each project of the node (the window Batch)
-                self.stitch_button = ttk.Button(row, text="Same as the stitch reference project",
-                                                command=self.same_as_stitch_reference)
-                for n, button in enumerate((self.same_button, self.stitch_button)):
-                    button.pack(side=tk.LEFT, padx=(12 if n == 0 else 6, 0), before=self.summary)
-
-            def same_as_stitch_reference(self):
-                """The quantities exported of the reference of the stitching of each project of the node."""
-                dialog = self.winfo_toplevel()
-                if hasattr(dialog, "copy_stitch_reference"):
-                    dialog.copy_stitch_reference("export")
-
-            def same_as_open(self):
-                """The quantities exported of the project open (those of its page Post-processing: the figures,
-                the videos, their parameters and maps) for all the projects of the node."""
-                if page.app.project_folder() is None:
-                    self.bell()
-                    self.note["text"] = "No project open: open one to use its quantities"
-                    return
-                spec = export_spec(page.export_spec())
-                self.show(spec)
-                if self.on_change is not None:
-                    self.on_change(spec, True)
-                # Once the panels are shown again (which clears it)
-                self.note["text"] = f"The quantities exported of {page.app.project_name()}"
+                self.node = None  # (PIV, PTV, {key: reason}, jet theory) of all the projects of the node selected
 
             def context(self, project, settings, items=None):
                 """The post-processing of a project with its settings, for the maps of the videos (their number;
                 the flow time captured: the vector fields read when a quantity with its video needs it, those of
                 the previous one kept if the same); the quantities greyed out that none of the projects of the node
                 (items: [(project, settings)]; the project alone by default) can export: those of the PTV, of the
-                images and of the POD."""
-                ptv, missing, _, _ = node_state(items or [(project, settings)])
-                self.node = (ptv, missing)
-                self.set_ptv(ptv)
+                images and of the POD, those of the jet theory when the add-on is off for all of them. The
+                reference: the quantities of the project open (the default export for the project open itself)."""
+                items = items or [(project, settings)]
+                dialog = self.winfo_toplevel()
+                mine = [p for p, _ in items if p is not None]
+                if hasattr(dialog, "reference") and mine and not all(dialog.is_open(p) for p in mine):
+                    self.set_reference(dialog.reference().get("export"))
+                else:
+                    self.set_reference(None)
+                piv_, ptv, missing, _, _ = node_state(items)
+                jet = any(((s or {}).get("settings") or {}).get("jet_theory") for _, s in items)
+                self.node = (piv_, ptv, missing, jet)
+                self.set_methods(piv_, ptv)
                 self.set_imaging(missing)
+                self.set_jet(jet)
                 if project is None or not project.results:
                     return self.set_post(None)
                 from ..batch_run import post_inputs
@@ -1712,7 +1847,8 @@ class PostProcessingPage(Page):
                 those of all the projects of the node."""
                 super().set_post(post)
                 if self.node is not None:
-                    self.ptv, self.missing = self.node[0], self.reasons(self.node[1])
+                    self.piv, self.ptv, self.jet = self.node[0], self.node[1], self.node[3]
+                    self.missing = self.reasons(self.node[2])
                     self.refresh_tags()
 
             def show(self, value, settings=None, enabled=True):
@@ -1723,51 +1859,28 @@ class PostProcessingPage(Page):
                 last = max(int(recipe.get("pod_mode_last") or first), first)
                 self.pod_images, self.pod_per_map = last - first + 1, bool(recipe.get("pod_combine"))
                 super().show(export_spec(value), rolling, enabled)
-                self.update_buttons()
-
-            def report(self, problems):
-                """A change kept (on_change), then the buttons following the quantities of the node."""
-                super().report(problems)
-                self.update_buttons()
-
-            def update_buttons(self):
-                """Check all and Uncheck all enabled with the node; the quantities of the open project or of the
-                stitch reference greyed when the projects of the node have them already."""
-                if not hasattr(self, "same_button"):  # Not yet while the editor is built
-                    return
-                enabled = self.enabled
-                for button in self.check_buttons:
-                    button.state(["!disabled"] if enabled else ["disabled"])
-                dialog = self.winfo_toplevel()
-                node = getattr(dialog, "form_node", None)
-                projects = dialog.targets(node) if node is not None and hasattr(dialog, "targets") else []
-                mine = [export_spec(dialog.settings_of(p).get("export")) for p in projects]
-                differ = page.app.project_folder() is not None and any(
-                    spec != export_spec(page.export_spec()) for spec in mine)
-                self.same_button.state(["!disabled"] if enabled and differ else ["disabled"])
-                stitched = (hasattr(dialog, "stitch_references")
-                            and dialog.stitch_references(projects, differing=True, part="export"))
-                self.stitch_button.state(["!disabled"] if enabled and stitched else ["disabled"])
 
         def confirm(dialog, entries, options):
             """The results of previous exports of the projects run (and of their stitchings): overwritten (all of
             them, asked once), else not run (None)."""
-            from ..batch_run import post_export_folder, post_inputs, project_name
+            from ..batch_run import post_datasets, post_export_folder, project_name
 
             conflicts, references = [], {}
             for entry in entries:
                 s = entry["settings"]["postprocessing"]
                 try:
-                    maps = post_inputs(entry["folder"], s)[0]
+                    datasets = post_datasets(entry["folder"], s)
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
-                folder = post_export_folder(entry["folder"], s, maps)
-                references[os.path.normcase(os.path.normpath(entry["folder"]))] = folder
-                conflicts.append((folder, previous_results(folder, project_name(entry["folder"]))))
+                for label, maps in datasets.items():
+                    folder = post_export_folder(entry["folder"], s, maps)
+                    references[(os.path.normcase(os.path.normpath(entry["folder"])), label)] = folder
+                    conflicts.append((folder, previous_results(folder, project_name(entry["folder"]))))
             for unit in options.get("units") or []:
                 stitching = unit.get("stitching")
                 if stitching:
-                    folder = references.get(os.path.normcase(os.path.normpath(stitching["members"][0]["folder"])))
+                    folder = references.get((os.path.normcase(os.path.normpath(stitching["members"][0]["folder"])),
+                                             stitching.get("pipeline") or ""))
                     if folder:
                         stitched = os.path.join(folder, "Stitched")
                         conflicts.append((stitched, previous_results(stitched, stitching["setup"], "Stitched",
@@ -1780,7 +1893,12 @@ class PostProcessingPage(Page):
             if settings.get("space") == "physical" and not settings.get("camera"):
                 raise ValueError(f"{project.label()}: the physical space needs the camera settings (field of view "
                                  "width, frame rate) of the side panel")
-            return {"postprocessing": {**settings, "maps_folder": batch_maps_folder(project, settings)}}
+            folders = batch_maps_folders(project, settings)
+            if not folders:
+                raise ValueError(f"{project.label()}: none of the results sets checked "
+                                 f"({', '.join(settings.get('results') or []) or 'none'})")
+            return {"postprocessing": {**settings, "maps_folders": folders,
+                                       "maps_folder": next(iter(folders.values()))}}
         return BatchStep("postprocessing", title, lambda project: project.results, self.batch_settings,
                          describe_post, job_settings, job=job, options=options, fields=post_fields,
                          validate=validate_post, to_project=("postprocessing", post_to_project),
@@ -1828,7 +1946,7 @@ class PostProcessingPage(Page):
         for tile in self.tiles:
             self.show_selectors(tile)
             tile.wiper = None
-            tile.message(f"{FIGURE_TITLES[tile.view]}\n\nRun the PIV/PTV (page PIV/PTV) or open vector fields")
+            tile.message(f"{FIGURE_TITLES[tile.view]}\n\nRun the PIV/PTV (page Velocimetry) or open vector fields")
             tile.set_slider(1, 0)
             tile.contour_sets = []
             self.show_contour(tile)
@@ -1837,23 +1955,30 @@ class PostProcessingPage(Page):
         """Symbol of the quantity of a map (LaTeX, with $; relabelled in the sensor space when maps are loaded)."""
         return self.post.symbol(key) if self.post is not None else f"${FIGURE_SYMBOLS[key]}$"
 
+    def jet_theory_on(self):
+        """The jet theory add-on is on: in the recipe of the vector fields, else in the side panel."""
+        if self.post is not None:
+            return self.post.settings.jet_theory
+        jet = getattr(getattr(self, "panel", None), "jet_theory", None)
+        return bool(jet.get()) if jet is not None else self.panel.saved().jet_theory
+
     def show_selectors(self, tile):
         """The quantities of a tile in its menus, the maps it can be compared with in the second one, the wiper
         shown when there is a second quantity (its slider named by the symbols of the two quantities), and the
         button of its video when it follows the maps."""
         compared = tile.view2 is not None and tile.view in MAP_FIGURES
-        # The quantities of the PTV greyed out for vector fields that aren't those of a PTV, those of the images and of
-        # their POD when they aren't found
-        disabled = set()
+        # The quantities of the PTV greyed out for vector fields that aren't those of a PTV, those of the quality of a
+        # PIV for those of a PTV, those of the images and of their POD when they aren't found, those of the jet theory
+        # when the add-on is off
+        disabled = set() if self.jet_theory_on() else set(jet.JET_GROUP[1])
         if self.post is not None:
-            if not self.post.ptv():
-                disabled |= set(lagrangian.GROUP[1])
+            disabled |= set(PIV_GROUP[1]) if self.post.ptv() else set(lagrangian.GROUP[1])
             # Each image on its own (the raw images may be missing, those pre-processed kept)
             disabled |= {k for k in imaging.IMAGE_FIGURES if self.post.image_missing(k)}
             if isinstance(self.post.pod(), str):
                 disabled |= imaging.POD_FIGURES
         tile.selector.show(tile.view, disabled=disabled)
-        tile.selector2.prefix = "" if compared else "Compare: "
+        tile.selector2.prefix = "vs " if compared else ""
         maps = None if self.post is None else [NO_COMPARISON] + [k for k in MAP_FIGURES if self.post.map_available(k)]
         tile.selector2.show(tile.view2 or NO_COMPARISON, maps)
         tile.show_compare(tile.view2 is not None)
@@ -1872,7 +1997,7 @@ class PostProcessingPage(Page):
         setpref("post_views", [t.view for t in self.tiles])
         if self.post is None:
             self.show_selectors(tile)
-            tile.message(f"{FIGURE_TITLES[key]}\n\nRun the PIV/PTV (page PIV/PTV) or open vector fields")
+            tile.message(f"{FIGURE_TITLES[key]}\n\nRun the PIV/PTV (page Velocimetry) or open vector fields")
         self.redraw([tile])
         tile.canvas.get_tk_widget().focus_set()
         self.app.save_project()
@@ -2240,13 +2365,20 @@ class ExportDialog(Dialog):
         groups.pack(fill=tk.X)
         chosen = set(FIGURE_TITLES) if choice["figures"] is None else set(choice["figures"])
         self.images, self.videos = {}, {}
+        # The groups of the menus of the tiles (those of a submenu named after it: Add-ons › Jet theory), the jet
+        # theory greyed out with its add-on off
+        jet_off = page.post is not None and not page.post.settings.jet_theory
         for i, (group, keys) in enumerate(FIGURE_GROUPS):
-            box = ttk.LabelFrame(groups, text=group or "Other", padding=6)
+            text = f"{MENU_PARENTS[group]} › {group}" if group in MENU_PARENTS else group or "Other"
+            box = ttk.LabelFrame(groups, text=text, padding=6)
             box.grid(row=i // self.COLUMNS, column=i % self.COLUMNS, sticky="nsew", padx=3, pady=3)
             for r, key in enumerate(keys):
                 self.images[key] = tk.BooleanVar(self, key in chosen)
-                ttk.Checkbutton(box, text=FIGURE_TITLES[key], variable=self.images[key],
-                                command=self.update_summary).grid(row=r, column=0, sticky=tk.W)
+                button = ttk.Checkbutton(box, text=FIGURE_TITLES[key], variable=self.images[key],
+                                         command=self.update_summary)
+                button.grid(row=r, column=0, sticky=tk.W)
+                if jet_off and key in jet.JET_GROUP[1]:
+                    button.state(["disabled"])
                 if page.post.instantaneous(key) if page.post is not None else key in INSTANTANEOUS:
                     self.videos[key] = tk.BooleanVar(self, key in choice["videos"])
                     own = " (own settings)" if self.own and key in self.own else ""

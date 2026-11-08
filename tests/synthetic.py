@@ -19,7 +19,8 @@ JET_PEAK, JET_WIDTH = 4.0, 14.0
 # The grid of the vector fields (px): every SPACING px from SPACING to the size minus SPACING
 SPACING = 16
 MODES, MODES_REMOVED = 3, 2
-CAMERA = piv.Camera(fov_width_mm=80.0, x_offset_mm=0.0, frame_rate_hz=100.0)
+# The camera of the jet: y = 0 on its axis, at the middle of the height of the images
+CAMERA = piv.Camera(fov_width_mm=80.0, x_offset_mm=0.0, frame_rate_hz=100.0, y_shift=0.5)
 
 
 def jet(y):

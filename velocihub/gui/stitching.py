@@ -4,13 +4,16 @@ the projects, the options of velocihub/archiving/post_archive.py below the node 
 Node stitching is done in order, the first one is the reference, then Ctrl+click on others to add or remove. 
 Name pattern matching is performed (For example, if stitching is selected between FOV1, FOV2 and FOV3 nodes,
 and each FOV has two nodes, 110Hz and 130Hz, then FOV1/110Hz/A will be stitched in order with FOV2/110Hz/A then FOV3/110Hz/A). 
-A chain of projects is only stitched if all of the ones in the chain is exported."""
+A chain of projects is only stitched if all of the ones in the chain is exported, and for each results set (PaIRS,
+TracTrac...) that all of them have and export. The column of the tree names each chain of projects with a letter and
+each of its projects with its rank: A.1 (the reference), A.2..., B.1..."""
 
 import os
 import re
 import tkinter as tk
 from tkinter import ttk
 
+from ..pipelines import selected_results
 from ..workspace import key
 
 
@@ -31,6 +34,16 @@ def physical(settings):
     """Settings of the post-processing of a project in the physical space, with its camera (the stitching)."""
     camera = settings.get("camera") or {}
     return settings.get("space", "physical") == "physical" and bool(camera.get("fov_width_mm"))
+
+
+def group_letter(n):
+    """The letter of the n-th chain of projects (0: A, ... 25: Z, 26: AA...)."""
+    letters = ""
+    n += 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        letters = chr(65 + r) + letters
+    return letters
 
 
 def fov_labels(chain):
@@ -71,7 +84,7 @@ class StitchOptions:
     FIELDS = [("MATCH_JET", "Jet cells: at least (fraction of the max)", float),
               ("MATCH_EDGE", "Edge columns left out", int)]
     # The title of the box of the options, the column of the tree: the stitching of each node
-    title, column, column_width = "Stitching", "Stitching", 210
+    title, column, column_width = "Stitching", "Stitch", 56
     # The settings of each field of view, kept when a project takes those of the reference of its stitching: its camera
     # (its width, offsets and frame rate: the positions of its maps)
     own_paths = (("camera",),)
@@ -79,7 +92,8 @@ class StitchOptions:
 
     def __init__(self, r, ws):
         self.r, self.ws, self.dialog = r, ws, None
-        self.chains, self.texts = [], {}  # The stitchings: [[(root, path) of the nodes]]; the column by node
+        # The stitchings: [[(root, path) of the nodes]]; the column by node, and its text in full (tip)
+        self.chains, self.texts, self.tips = [], {}, {}
 
     def attach(self, dialog):
         self.dialog = dialog
@@ -100,7 +114,7 @@ class StitchOptions:
                                "Name patten matching is performed within the node tree structure to figure out stiching automatically between common nodes. "
                                "Figures for each project are still exported. Stitched results are in the reference's folder. "
                                "Right click any stitched node to open the alignment window.",
-                  foreground="#555555", wraplength=340, justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
+                  foreground="#555555", wraplength=250, justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
 
     def add_flags(self, parent, values, flags):
         for name, text in flags:
@@ -146,7 +160,7 @@ class StitchOptions:
             if len(iids) < 2:
                 continue
             maps = [self.below(iid) for iid in iids]
-            labels = [dialog.tree.item(iid, "text") for iid in iids]
+            labels = [dialog.names.get(iid, "") for iid in iids]
             for path in maps[0]:
                 projects = [found.get(path) for found in maps]
                 missing = [label for label, p in zip(labels, projects) if p is None]
@@ -165,37 +179,61 @@ class StitchOptions:
                             reason = f"{p.path}: no camera settings (the stitching needs the physical space)"
                         if reason:
                             break
+                    if reason is None and not self.common_sets(projects):
+                        reason = "no results set (PaIRS, TracTrac...) that all of them have and export"
                 if reason is None:
                     used.update(key(p.folder) for p in projects)
                 out.append((iids, projects, reason))
         return out
 
+    def common_sets(self, projects):
+        """The results sets that all the projects have and export (their stitchings), in the order of the
+        pipelines."""
+        sets = None
+        for p in projects:
+            mine = list(selected_results(p.results_folders(), self.dialog.settings_of(p).get("results")))
+            sets = mine if sets is None else [label for label in sets if label in mine]
+        return sets or []
+
     def prepare(self, dialog):
-        """The column Stitching of the nodes (before the tree is refreshed): the nodes chosen in their order, each
-        reference project with the projects it is stitched to, the others with their reference."""
-        self.texts = {}
+        """The column of the nodes (before the tree is refreshed): the nodes chosen of a stitching by their rank (N1
+        the reference node, N2...), each chain of projects by a letter and each of its projects by its rank (A.1 the
+        reference, A.2...; ✗: not stitched), the text in full in their tips."""
+        self.texts, self.tips = {}, {}
         resolved = self.resolve()
         for chain in self.chains:
             iids = [iid for iid in (self.iid_of(node) for node in chain) if iid]
-            labels = [dialog.tree.item(iid, "text") for iid in iids]
+            labels = [dialog.names.get(iid, "") for iid in iids]
             for n, iid in enumerate(iids if len(iids) > 1 else []):
                 if dialog.items[iid][0] != "project":
-                    self.texts[iid] = ("Reference → " + " → ".join(labels[1:]) if n == 0
-                                       else f"Stitched to {labels[0]} ({n + 1} of {len(iids)})")
-        for _, projects, reason in resolved:
-            reference = projects[0]
+                    self.texts[iid] = f"N{n + 1}"
+                    self.tips[iid] = ("Reference node → " + " → ".join(labels[1:]) if n == 0
+                                      else f"Node {n + 1} of {len(iids)}, stitched to {labels[0]}")
+        for g, (_, projects, reason) in enumerate(resolved):
+            reference, letter = projects[0], group_letter(g)
+            sets = ", ".join(self.common_sets([p for p in projects if p is not None])) if reason is None else ""
             for n, p in enumerate(projects):
                 if p is None:
                     continue
                 iid = "project|" + key(p.folder)
+                self.texts[iid] = f"{letter}.{n + 1}" + (" ✗" if reason is not None else "")
                 if reason is not None:
-                    self.texts[iid] = f"Not stitched: {reason}"
+                    self.tips[iid] = f"{letter}.{n + 1}, not stitched: {reason}"
                 elif n == 0:
-                    self.texts[iid] = "This project → " + " → ".join(other.path for other in projects[1:])
+                    self.tips[iid] = (f"{letter}.1, the reference: → " + " → ".join(other.path for other in projects[1:])
+                                      + f" ({sets})")
                 else:
-                    self.texts[iid] = f"Stitched to {reference.path}"
+                    self.tips[iid] = f"{letter}.{n + 1}, stitched to {letter}.1 {reference.path} ({sets})"
 
         self.enable(any(reason is None for _, _, reason in resolved))
+
+    def rank(self, project):
+        """The rank of a project in the column (A.1...; "" if it isn't in a chain of projects)."""
+        return self.texts.get("project|" + key(project.folder), "").split(" ")[0]
+
+    def tip(self, dialog, iid):
+        """The text in full of the column of a node."""
+        return self.tips.get(iid, self.texts.get(iid, ""))
 
     def enable(self, on):
         """The options usable (a stitching run), else greyed."""
@@ -226,7 +264,7 @@ class StitchOptions:
             hit = next((n for n, (_, projects) in enumerate(chains)
                         if any("project|" + key(p.folder) == iid for p in projects)), None)
             if iid in iids or hit is not None:
-                labels = [self.dialog.tree.item(i, "text") for i in iids]
+                labels = [self.dialog.names.get(i, "") for i in iids]
                 targets = [self.dialog.targets(i) for i in iids]
                 return labels, chains, targets, hit or 0
         return None
@@ -244,20 +282,30 @@ class StitchOptions:
         return None
 
     def context_items(self, dialog, iid):
-        """The menu of a node of a stitching: Align the stitching... (alignment.py)."""
+        """The menu of a node of a stitching: its projects stitched take all the settings of the reference of their
+        stitching (but the camera of their field of view), Align the stitching... (alignment.py)."""
         group = self.group_of(iid)
         if group is None:
             return []
         labels, chains, targets, choice = group
-        label = "Align the stitching (" + " → ".join(labels) + ")..."
+        projects = dialog.targets(iid)
+        pairs = dialog.stitch_references(projects, differing=True)
+        stitched = dialog.stitch_references(projects)
+        # The references by their rank in the column (A.1...), the group of the chain of projects clicked (A...)
+        names = sorted({self.rank(r) for _, r in stitched.values()})
+        take = (f"Take settings of {', '.join(names)}" if stitched else None,
+                (lambda: dialog.copy_stitch_reference(projects=projects)) if pairs else None)
+        items = [take] if take[0] else []
+        group = self.rank(chains[choice][1][0]).split(".")[0] if chains else ""
+        label = f"Align Group {group}" if group else "Align"
         if not chains:
-            return [(label + ": no project in all its nodes", None)]
+            return items + [("Align: no project in all its nodes", None)]
 
         def align():
             from .alignment import AlignWindow
 
             AlignWindow(dialog, labels, chains, targets, choice)
-        return [(label, align)]
+        return items + [(label, align)]
 
     def ctrl_click(self, dialog, iid):
         """Ctrl+click on a node: out of its stitching if it is in one, else added to the stitching of the node
@@ -296,8 +344,9 @@ class StitchOptions:
 
     def job(self, projects):
         """The options of the run: with stitchings, its units (batch_run.py): the projects checked outside them, one
-        by one, then each chain of projects stitched ({"setup", "members": [{"folder", "root", "fov"}], the
-        reference first})."""
+        by one, then each chain of projects stitched, once per results set that all of them have and export
+        ({"setup", "members": [{"folder", "root", "fov"}], the reference first, "pipeline"}), its projects exporting
+        their other results sets on their own ({"pipelines"})."""
         options = self.read()
         del options["stitchings"]
         chains = [chain for _, chain, reason in self.resolve() if reason is None]
@@ -305,10 +354,16 @@ class StitchOptions:
             stitched = {key(p.folder) for chain in chains for p in chain}
             units = [{"label": p.label(), "folders": [p.folder]} for p in projects if key(p.folder) not in stitched]
             for name, chain in zip(setup_names(chains), chains):
-                units.append({"label": f"Stitching {name}: " + " → ".join(p.path for p in chain),
-                              "folders": [p.folder for p in chain],
-                              "stitching": {"setup": name, "members": [{"folder": p.folder, "root": p.root,
-                                                                        "fov": fov}
-                                                                       for p, fov in zip(chain, fov_labels(chain))]}})
+                common = self.common_sets(chain)
+                members = [{"folder": p.folder, "root": p.root, "fov": fov} for p, fov in zip(chain, fov_labels(chain))]
+                for label in common:
+                    units.append({"label": f"Stitching {name} ({label}): " + " → ".join(p.path for p in chain),
+                                  "folders": [p.folder for p in chain],
+                                  "stitching": {"setup": name, "members": members, "pipeline": label}})
+                for p in chain:
+                    rest = [label for label in self.common_sets([p]) if label not in common]
+                    if rest:
+                        units.append({"label": f"{p.label()} ({', '.join(rest)})", "folders": [p.folder],
+                                      "pipelines": rest})
             options["units"] = units
         return options

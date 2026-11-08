@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.transforms import blended_transform_factory
 
-from ..preprocessing import Stopped, as2d, same_path
+from ..preprocessing import Stopped, as2d, same_path, title_lines
 from ..settings import (COLORMAPS)
 
 
@@ -139,11 +139,38 @@ def ask_colour_range(app, name, current, custom=None):
 
 def colour_tools(bar, before, on_cmap, on_clim):
     """Colour tools of a tile, next to one another before the Matplotlib tools: its colour map (ColormapBox) and
-    the button of its colour range. Returns the list of the colour maps."""
-    box = ColormapBox(bar, on_cmap)
+    the button of its colour range (short: the bar of a tile is narrow). Returns the list of the colour maps."""
+    box = ColormapBox(bar, on_cmap, width=7)
     box.pack(side=tk.LEFT, padx=(0, 2), before=before)
-    tk.Button(bar, text="Colour range...", command=on_clim).pack(side=tk.LEFT, padx=(0, 6), before=before)
+    button = tk.Button(bar, text="Range", command=on_clim)
+    button.pack(side=tk.LEFT, padx=(0, 4), before=before)
+    hover_tip(button, "Colour range of the colour bar (min, max)")
+    hover_tip(box, "Colour map of the figure (Default: the one of the figure)")
     return box
+
+
+def hover_tip(widget, text):
+    """The text (or text(): its text when shown) in a tip while the mouse is over a widget."""
+    state = {"tip": None}
+
+    def show(event):
+        message = text() if callable(text) else text
+        if state["tip"] is not None or not message:
+            return
+        tip = state["tip"] = tk.Toplevel(widget)
+        tip.wm_overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=message, justify=tk.LEFT, background="#ffffe8", foreground="#222222", relief=tk.SOLID,
+                 borderwidth=1, padx=6, pady=3).pack()
+        tip.wm_geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + widget.winfo_height() + 2}")
+
+    def hide(event=None):
+        if state["tip"] is not None:
+            state["tip"].destroy()
+            state["tip"] = None
+    widget.bind("<Enter>", show, add="+")
+    widget.bind("<Leave>", hide, add="+")
+    widget.bind("<ButtonPress>", hide, add="+")
 
 
 class ColormapBox(ttk.Combobox):
@@ -164,12 +191,16 @@ class ColormapBox(ttk.Combobox):
 
 class FigureSelector(ttk.Menubutton):
     """Menu button of the figures of a tile: a submenu per group of figures (groups: [(group, keys)]; group None:
-    the figures at the root of the menu; titles: their names), the figure shown on the button (after prefix).
-    command(key) is called with the figure chosen."""
+    the figures at the root of the menu; titles: their names; parents: {group: submenu} the groups gathered in a
+    submenu, at the place of the first of them), the figure shown on the button (after prefix; short(key): its text
+    on the button, its name in full in a tip). command(key) is called with the figure chosen."""
 
-    def __init__(self, master, groups, titles, command, width=36, prefix=""):
+    def __init__(self, master, groups, titles, command, width=36, prefix="", parents=None, short=None):
         super().__init__(master, width=width)
         self.groups, self.titles, self.command, self.prefix = groups, titles, command, prefix
+        self.parents, self.short, self.current = dict(parents or {}), short, None
+        if short is not None:
+            hover_tip(self, lambda: self.prefix + self.titles[self.current] if self.current is not None else "")
         self.menu = tk.Menu(self, tearoff=False)
         self["menu"] = self.menu
         self.var = tk.StringVar(self)
@@ -185,20 +216,34 @@ class FigureSelector(ttk.Menubutton):
             self.menu.delete(0, tk.END)
             for child in self.menu.winfo_children():
                 child.destroy()
+            # The submenus gathering groups ({label: menu}) and the figures in them ({label: keys})
+            parents, parent_keys = {}, {}
             for group, members in self.groups:
                 available = [key for key in members if key in keys]
                 if not available:
                     continue
-                sub = self.menu if group is None else tk.Menu(self.menu, tearoff=False)
+                parent = self.menu
+                label = self.parents.get(group)
+                if label is not None:
+                    if label not in parents:
+                        parents[label] = tk.Menu(self.menu, tearoff=False)
+                        parent_keys[label] = set()
+                        self.menu.add_cascade(label=label, menu=parents[label])
+                    parent = parents[label]
+                    parent_keys[label] |= set(available)
+                sub = self.menu if group is None else tk.Menu(parent, tearoff=False)
                 for key in available:
                     sub.add_radiobutton(label=self.titles[key], value=key, variable=self.var,
                                         command=lambda key=key: self.command(key),
                                         state=tk.DISABLED if key in disabled else tk.NORMAL)
                 if group is not None:
-                    self.menu.add_cascade(label=group, menu=sub,
-                                          state=tk.DISABLED if disabled >= set(available) else tk.NORMAL)
+                    parent.add_cascade(label=group, menu=sub,
+                                       state=tk.DISABLED if disabled >= set(available) else tk.NORMAL)
+            for label, members in parent_keys.items():
+                self.menu.entryconfigure(label, state=tk.DISABLED if disabled >= members else tk.NORMAL)
         self.var.set(current)
-        self.configure(text=self.prefix + self.titles[current])
+        self.current = current
+        self.configure(text=self.prefix + (self.short(current) if self.short is not None else self.titles[current]))
 
 
 class FigurePanel(ttk.Frame):
@@ -375,7 +420,8 @@ class FigurePanel(ttk.Frame):
         self.im = self.ax.imshow(img, cmap=cmap, vmin=clim[0], vmax=clim[1], extent=(0.5, W + 0.5, H + 0.5, 0.5))
         # The masks drawn over the image don't change its limits
         self.ax.set_autoscale_on(False)
-        self.ax.set_title(title, fontsize="medium", wrap=True)
+        # Broken into lines here: Matplotlib's wrapping shrinks the axes when a colour bar is added (title_lines)
+        self.ax.set_title(title_lines(title), fontsize="medium")
         self.ax.set_xlabel(self.axis_labels[0])
         self.ax.set_ylabel(self.axis_labels[1])
         self.cbar = self.fig.colorbar(self.im, ax=self.ax, label=self.clabel) if colorbar else None
@@ -393,7 +439,7 @@ class FigurePanel(ttk.Frame):
             clim = (np.nanmin(img), np.nanmax(img))
         self.im.set_data(img)
         self.im.set_clim(*clim)
-        self.ax.set_title(title, fontsize="medium", wrap=True)
+        self.ax.set_title(title_lines(title), fontsize="medium")
         self.canvas.draw_idle()
         return clim
 
@@ -470,6 +516,36 @@ class FigurePanel(ttk.Frame):
         for text, ha in (("◀ before ", "right"), (" after ▶", "left")):
             self.divider.append(self.ax.text(x, 0.98, text, transform=at_top, ha=ha, va="top", color="white",
                                              fontsize="small", bbox=box, clip_on=True))
+
+
+class ScrolledFrame(ttk.Frame):
+    """A frame scrolled vertically (its widgets in inner): a scroll bar at its right, the mouse wheel over it; as wide
+    as its widgets at least (height: its height at first)."""
+
+    def __init__(self, master, height=200):
+        super().__init__(master)
+        background = ttk.Style(self).lookup("TFrame", "background") or None
+        self.canvas = canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0, height=height,
+                                         background=background)
+        bar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bar.pack(side=tk.LEFT, fill=tk.Y)
+        self.inner = ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, window=self.inner, anchor=tk.NW)
+
+        def fit(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"), width=self.inner.winfo_reqwidth())
+        self.inner.bind("<Configure>", fit)
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(
+            window, width=max(event.width, self.inner.winfo_reqwidth())))
+        for widget in (canvas, self.inner):
+            widget.bind("<Enter>", lambda event: self.bind_all("<MouseWheel>", self.wheel), add="+")
+            widget.bind("<Leave>", lambda event: self.unbind_all("<MouseWheel>"), add="+")
+
+    def wheel(self, event):
+        if self.canvas.yview() != (0.0, 1.0):
+            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
 
 class PathBox(ttk.Frame):

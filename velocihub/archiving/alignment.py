@@ -5,8 +5,8 @@ suggest_offset).
 
     from velocihub.archiving import alignment
 
-    ref = alignment.background("D:/Jet/FOV_1/Run_30", fov_width_mm=196.1)         # mean raw image
-    mov = alignment.background("D:/Jet/FOV_2/Run_30", fov_width_mm=196.5)
+    ref = alignment.image_source(paths_1, {"fov_width_mm": 196.1, "y_shift": 0.5})    # mean raw image
+    mov = alignment.image_source(paths_2, {"fov_width_mm": 196.5, "y_shift": 0.5})
     offset, quality = alignment.suggest_offset(ref, (0, 0), mov, (120, 0), radius_mm=10)
 """
 
@@ -18,7 +18,9 @@ from PIL import Image
 from scipy import ndimage
 
 from ..fields import VECTORS_FILE, load_vectors
-from ..piv import Camera, PIV_FOLDER
+from ..greyscale import read_grey
+from ..piv import PIV_FOLDER
+from ..settings import camera_of
 from ..workspace import image_names
 
 
@@ -47,24 +49,36 @@ class Source:
 
 
 def read_image(path, reduce):
-    with Image.open(path) as im:
-        im = im.convert("F") if im.mode not in ("F", "I;16", "I") else im
-        arr = np.asarray(im, np.float32)
+    arr = read_grey(path).astype(np.float32)
     if reduce > 1:
         h, w = arr.shape[0] // reduce * reduce, arr.shape[1] // reduce * reduce
         arr = arr[:h, :w].reshape(h // reduce, reduce, w // reduce, reduce).mean(axis=(1, 3))
     return arr
 
 
-def image_source(paths, fov_width_mm, median=True):
-    """The background of images (the median of them; their width: that of the field of view)."""
+def local_camera(camera):
+    """The piv.Camera of a camera of the batch settings (a dictionary; or the width of the field of view), without
+    the offsets of the field of view."""
+    if not isinstance(camera, dict):
+        camera = {"fov_width_mm": float(camera)}
+    return camera_of({**camera, "x_offset_mm": 0.0, "y_offset_mm": 0.0})
+
+
+def image_source(paths, camera, median=True):
+    """The background of images (the median of them) placed as the camera places them (camera: a camera of the batch
+    settings, or the width of the field of view): its pixels made square (the horizontal pitch), its left and top
+    edges from the origin of the axes."""
     with Image.open(paths[0]) as im:
-        width = im.size[0]
+        width, height = im.size
     reduce = max(1, int(np.ceil(width / MAX_WIDTH)))
     stack = [read_image(p, reduce) for p in paths]
     arr = np.median(np.stack(stack), axis=0) if median and len(stack) > 2 else np.mean(stack, axis=0)
-    pixel = fov_width_mm / width * reduce
-    return Source(arr, pixel, 0.0, arr.shape[0] * pixel / 2)
+    cam = local_camera(camera)
+    sx, sy = cam.pitches(width, height)
+    if abs(sy - sx) > 1e-9 * sx:  # Non-square pixels: the rows resampled to the horizontal pitch
+        arr = ndimage.zoom(arr, (sy / sx, 1.0), order=1)
+    left, top = cam.positions(0.0, 0.0, width, height)
+    return Source(arr, sx * reduce, float(left), float(top))
 
 
 def mean_image(project, camera):
@@ -72,7 +86,7 @@ def mean_image(project, camera):
     if not names:
         return None
     picked = [names[int(i)] for i in np.linspace(0, len(names) - 1, min(MEAN_IMAGES, len(names)))]
-    return image_source([os.path.join(project.folder, n) for n in picked], camera["fov_width_mm"])
+    return image_source([os.path.join(project.folder, n) for n in picked], camera)
 
 
 def calibration_image(project, camera):
@@ -82,7 +96,7 @@ def calibration_image(project, camera):
         folder = os.path.join(here, CALIBRATION)
         names = image_names(folder) if os.path.isdir(folder) else []
         if names:
-            return image_source([os.path.join(folder, names[0])], camera["fov_width_mm"], median=False)
+            return image_source([os.path.join(folder, names[0])], camera, median=False)
         if os.path.normcase(here) == os.path.normcase(root) or os.path.dirname(here) == here:
             return None
         here = os.path.dirname(here)
@@ -94,8 +108,7 @@ def mean_velocity(project, camera):
         maps = os.path.join(project.folder, VECTORS_FILE)
     if not os.path.isfile(maps):
         return None
-    fields = load_vectors(maps, camera=Camera(fov_width_mm=float(camera["fov_width_mm"]), x_offset_mm=0.0,
-                                              y_offset_mm=0.0, frame_rate_hz=float(camera["frame_rate_hz"])))
+    fields = load_vectors(maps, camera=local_camera(camera))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         speed = np.nanmean(np.hypot(fields.U, fields.V), axis=0)
@@ -141,15 +154,19 @@ def phase_shift(a, b, radius):
     return np.array(shift), float(r[peak] / second) if second > 0 else float("inf")
 
 
-def background(folder, fov_width_mm, kind="Mean raw image", frame_rate_hz=150.0, root=None):
-    """The background of a project folder for the alignment (a Source; None if it has none): kind among BACKGROUNDS,
+def background(folder, camera, kind="Mean raw image", frame_rate_hz=None, root=None):
+    """The background of a project folder for the alignment (a Source; None if it has none), placed by its camera (a
+    camera of the batch settings, settings.CAMERA_KEYS, or the width of the field of view): kind among BACKGROUNDS,
     "Mean raw image" (the median of MEAN_IMAGES of its images), "Mean velocity |u|" (of its PIV results; needs the
-    frame rate) or "Calibration image" (the first image of a folder Calibration in the folder or above it, up to
-    root)."""
+    frame rate: that of the camera, or frame_rate_hz) or "Calibration image" (the first image of a folder
+    Calibration in the folder or above it, up to root)."""
     from types import SimpleNamespace
 
     project = SimpleNamespace(folder=folder, root=root)
-    return LOADERS[kind](project, {"fov_width_mm": float(fov_width_mm), "frame_rate_hz": float(frame_rate_hz)})
+    camera = dict(camera) if isinstance(camera, dict) else {"fov_width_mm": float(camera)}
+    if frame_rate_hz is not None:
+        camera["frame_rate_hz"] = float(frame_rate_hz)
+    return LOADERS[kind](project, camera)
 
 
 def resample(source, offset, onto, onto_offset):
