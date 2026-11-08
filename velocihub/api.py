@@ -158,7 +158,7 @@ class Project:
         return self
 
     def set_piv(self, engine=None, settings=None, regression=None, output_folder=None, **engine_settings):
-        """Change the PIV/PTV (the side panel of the page PIV/PTV; None: unchanged).
+        """Change the PIV/PTV (the side panel of the page Velocimetry; None: unchanged).
 
         engine: "PaIRS-UniNa" or "TracTrac" (name or key); settings: the settings of the engine (a dictionary,
         merged with those it has), or as keywords (windows=(128, 64, 32), overlap=50, particle_size=3...; see
@@ -284,7 +284,7 @@ class Project:
         return result
 
     def run_piv(self, force=False, report=None):
-        """Run step > Singular of the page PIV/PTV: the images pre-processed first if needed, then the PIV/PTV (and the
+        """Run step > Singular of the page Velocimetry: the images pre-processed first if needed, then the PIV/PTV (and the
         regression), continued from the pairs saved; skipped if the results are up to date (force: computed again).
         report(message): its messages (printed by default). Returns a batch.BatchResult."""
         p = self.piv

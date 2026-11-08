@@ -45,7 +45,7 @@ PROJECT_FILE_TYPES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json"), 
 # Menus shared by the pages, first and last; the menus of the pages are between them
 FIRST_MENUS = ("File", "Settings")
 # The menus of the pages not shown (their items never used from the menu bar: their keyboard shortcuts kept)
-HIDDEN_MENUS = ("Pre-processing", "PIV/PTV", "Post-processing")
+HIDDEN_MENUS = ("Pre-processing", "Velocimetry", "Post-processing")
 LAST_MENUS = ("Help",)
 
 

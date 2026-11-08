@@ -1,5 +1,5 @@
 """The page of the post-processing (gui/postprocessing_page.py) in the interface: its side panel, the results of the
-project (whatever the page PIV/PTV), the POD modes (slider, tiles, sum), the quantities greyed out that can't be drawn,
+project (whatever the page Velocimetry), the POD modes (slider, tiles, sum), the quantities greyed out that can't be drawn,
 the export overwriting the previous one or not, the PIV and PTV results of a project (panel Projects) and a new
 workspace unloading them."""
 
@@ -98,7 +98,7 @@ def test_side_panel(gui):
 
 
 def test_results_whatever_the_piv_page(gui, copy, tmp_path):
-    """A project with PIV results only, the PTV chosen in the page PIV/PTV: its PIV results post-processed."""
+    """A project with PIV results only, the PTV chosen in the page Velocimetry: its PIV results post-processed."""
     copy("piv", "campaign", "m")
     piv_page = gui.app.page("piv")
     page, projects = open_project(gui, str(tmp_path / "campaign"), "m")

@@ -536,7 +536,7 @@ class PIVPage(Page):
     shown can be computed alone (run_pair), to check the settings."""
 
     key = "piv"
-    title = "PIV/PTV"
+    title = "Velocimetry"
     project_key = "piv"
 
     def __init__(self, master, app):
@@ -623,7 +623,7 @@ class PIVPage(Page):
 
     def menus(self):
         return [("Settings", [("PaIRS Python interpreter...", None, self.choose_python)]),
-                ("PIV/PTV", [("Run the PIV/PTV · Stop", "F5", self.run_or_stop),
+                ("Velocimetry", [("Run the PIV/PTV · Stop", "F5", self.run_or_stop),
                          ("Run on the pair shown", "F6", self.run_pair), None,
                          ("Clear the cache", None, self.clear_cache)])]
 
@@ -671,7 +671,7 @@ class PIVPage(Page):
                 "output_folder": os.path.relpath(output, root) if root and output else None}
 
     def batch_step(self):
-        return BatchStep("piv", "PIV/PTV", lambda project: project.images, self.batch_settings, describe_piv,
+        return BatchStep("piv", "Velocimetry", lambda project: project.images, self.batch_settings, describe_piv,
                          lambda project, settings, settings_of: {"preprocessing": settings_of("preprocessing",
                                                                                              project),
                                                                  "piv": settings},
@@ -1564,7 +1564,7 @@ class PIVPage(Page):
             return
         pairs = self.pair_list()
         if not pairs:
-            app.msgbox(f"No pair of images with {self.n_images()} images.", "PIV/PTV", "warn")
+            app.msgbox(f"No pair of images with {self.n_images()} images.", "Velocimetry", "warn")
             return
         self.update_images_label()
         kind, where = self.source()
@@ -1781,7 +1781,7 @@ class PIVPage(Page):
                 app.log_step("piv", text + app.project_path(path))
             app.msgbox(f"The PIV/PTV is done: {f.n} pairs{valid_text(valid)}{took}.\n\nThe vector fields are "
                        f"saved in {os.path.dirname(path)}"
-                       + (" and shown in the page Post-processing." if post else "."), "PIV/PTV")
+                       + (" and shown in the page Post-processing." if post else "."), "Velocimetry")
             return True
         elif kind == "stopped":
             self.finish()

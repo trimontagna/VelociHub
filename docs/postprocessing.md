@@ -10,7 +10,7 @@ Modules: `velocihub/fields.py` (`load_vectors`, `VectorFields`, `FieldSettings`,
 
 ## Features
 
-- **Inputs**: the results of the PIV/PTV page (`PIV/vectors.npz`, or `PTV/`), any other `vectors.npz`, or a folder of
+- **Inputs**: the results of the Velocimetry page (`PIV/vectors.npz`, or `PTV/`), any other `vectors.npz`, or a folder of
   DynamicStudio CSV exports.
 - **Two scale spaces**: *Sensor* — the fields as computed: positions in image pixels, displacements in px, maps
   numbered by pair; *Physical* — converted with the camera settings: positions in mm (or over L_ref), velocities in

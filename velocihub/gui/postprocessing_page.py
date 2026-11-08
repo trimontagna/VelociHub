@@ -1163,9 +1163,9 @@ class PostProcessingPage(Page):
     # ------------------------------------------------------------------ vector fields
 
     def default_maps_folder(self):
-        """The results of the project post-processed by default, whatever the engine chosen in the page PIV/PTV: those
+        """The results of the project post-processed by default, whatever the engine chosen in the page Velocimetry: those
         of the default pipeline, else of the first pipeline it has (pipelines.chosen_results), else those of the
-        results folder of the page PIV/PTV (a folder of its own); without any, that folder (or the subfolder PIV of the
+        results folder of the page Velocimetry (a folder of its own); without any, that folder (or the subfolder PIV of the
         project)."""
         piv_page = self.app.page("piv")
         output = piv_page.output_folder() if piv_page is not None else None
@@ -1491,7 +1491,7 @@ class PostProcessingPage(Page):
         panel.batch_button.configure(state=tk.NORMAL if self.any_results() else tk.DISABLED)
         if self.post is None:
             panel.maps_label["text"] = message or (
-                "No vector fields: run the PIV/PTV (page PIV/PTV), or choose a folder of vector fields."
+                "No vector fields: run the PIV/PTV (page Velocimetry), or choose a folder of vector fields."
                 if self.loaded is None else panel.maps_label["text"])
             return
         panel.maps_label["text"] = describe_fields(self.post.fields)
@@ -1946,7 +1946,7 @@ class PostProcessingPage(Page):
         for tile in self.tiles:
             self.show_selectors(tile)
             tile.wiper = None
-            tile.message(f"{FIGURE_TITLES[tile.view]}\n\nRun the PIV/PTV (page PIV/PTV) or open vector fields")
+            tile.message(f"{FIGURE_TITLES[tile.view]}\n\nRun the PIV/PTV (page Velocimetry) or open vector fields")
             tile.set_slider(1, 0)
             tile.contour_sets = []
             self.show_contour(tile)
@@ -1997,7 +1997,7 @@ class PostProcessingPage(Page):
         setpref("post_views", [t.view for t in self.tiles])
         if self.post is None:
             self.show_selectors(tile)
-            tile.message(f"{FIGURE_TITLES[key]}\n\nRun the PIV/PTV (page PIV/PTV) or open vector fields")
+            tile.message(f"{FIGURE_TITLES[key]}\n\nRun the PIV/PTV (page Velocimetry) or open vector fields")
         self.redraw([tile])
         tile.canvas.get_tk_widget().focus_set()
         self.app.save_project()

@@ -59,7 +59,7 @@ conda env create -f environment-pairs.yml     # environment "PaIRS": Python 3.13
 ```
 
 Without conda: install Python 3.13 and run `py -3.13 -m pip install PaIRS-UniNa`, then select that `python.exe` in
-**Settings > PaIRS Python interpreter...** of the PIV/PTV page.
+**Settings > PaIRS Python interpreter...** of the Velocimetry page.
 
 ### Without installing
 
@@ -82,7 +82,7 @@ velocihub D:/Jet/Run_30 "*.tif" --masks D:/Jet/masks.json
 ```
 
 The window has a panel **Projects** on the left (the workspace), one page per step (**Pre-processing**,
-**PIV/PTV**, **Post-processing**) and a status log at the bottom. Each page has its settings on the right and figure
+**Velocimetry**, **Post-processing**) and a status log at the bottom. Each page has its settings on the right and figure
 tiles in the middle; the arrow keys browse the images or maps of the tile under the mouse, and the tiles that show the
 same series follow each other.
 
@@ -111,7 +111,7 @@ You can skip step 6: the PIV exports the images itself when it needs them.
 
 ### Step 2 — PIV or PTV
 
-1. Open the **PIV/PTV** page. **Images** shows which images the PIV will use (pre-processed by default).
+1. Open the **Velocimetry** page. **Images** shows which images the PIV will use (pre-processed by default).
 2. **PIV/PTV software**: **PaIRS-UniNa (PIV)** with windows `128 64 32` px and 50 % overlap (the defaults), or
    **TracTrac (PTV)**.
 3. Check the seeding: the three yellow windows on the image are counted in **Particles in the windows** (about

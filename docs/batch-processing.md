@@ -45,7 +45,7 @@ What each step's form contains:
 | Step | Settings per project | Options of the run |
 |---|---|---|
 | Pre-processing | Masks (enabled), contrast enhancement, background removal (enabled, modes removed) | — |
-| PIV/PTV | Engine and its settings, regression, results folder; with the pre-processing settings (the images are pre-processed first if needed) | — |
+| Velocimetry | Engine and its settings, regression, results folder; with the pre-processing settings (the images are pre-processed first if needed) | — |
 | Post-processing | **Results sets exported** (the pipelines checked, PaIRS, TracTrac...: each project exports those it has, each with the same settings and quantities, to `PostProcessing/[pipeline]`), scale space, camera, recipe, export folder, quantities to export (as the Quantities window: the groups of the menus of the tiles; those that the projects can't export greyed out and folded; a quantity whose parameters differ from the open project's in bold with its ↺; exporting a quantity or not isn't a parameter change) | Stitchings (below) |
 | Archive projects | Categories of files archived per project | Archive file, format |
 

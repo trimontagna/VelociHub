@@ -22,7 +22,7 @@ The processing runs without Tkinter: the interface (`velocihub.gui`) is only imp
 | `velocihub.settings` | The settings of each step as the window Batch and the project file keep them, their conversions and validation, the export specification (`export_spec`, `export_options`) |
 | `velocihub.preprocessing` | `PODBackgroundRemoval`, `ContrastSettings`, `Mask`, filters (`intensity_capping`, `minmax_normalization`, `clahe`, `edge_enhancement`), `imread`, `imwrite` |
 | `velocihub.piv` | `run_piv`, `PIVRun`, `Camera`, `get_engine`, `ENGINES`, `PIVEngine`, `register`, `count_particles`, `check_regression` |
-| `velocihub.piv.displacements` | `pair_displacements`, `pair_particles`, `read_tracks`, `grid_pixels` (the displacement views of the PIV/PTV page) |
+| `velocihub.piv.displacements` | `pair_displacements`, `pair_particles`, `read_tracks`, `grid_pixels` (the displacement views of the Velocimetry page) |
 | `velocihub.fields` | `load_vectors`, `VectorFields`, `FieldSettings` |
 | `velocihub.postprocessing` | `PostProcessing`, `PostSettings`, `FIGURES`, `FIGURE_GROUPS`, `INSTANTANEOUS` |
 | `velocihub.batch` | Batch functions ([batch-processing.md](batch-processing.md)) |
@@ -43,7 +43,7 @@ p = vh.Project("D:/Jet/FOV_1/Run_30")      # reads VelociHub_project.json (inter
 p.set_preprocessing(masks="D:/Jet/masks.json",            # or a list of polygons [[x, y], ...]
                     filters=["capping"], stage="post", cap_n=10,
                     modes_removed=6)                       # 0: no background removal
-# Page PIV/PTV
+# Page Velocimetry
 p.set_piv(engine="PaIRS-UniNa", windows=(128, 64, 32), overlap=50)
 # p.set_piv(engine="TracTrac", particle_size=3, vid_loop=2, regression="spicy")
 # Page Post-processing and its window Quantities
@@ -65,7 +65,7 @@ p.run()                     # Run step > Singular of the three pages: preprocess
 | Settings saved in the project | `p.save()` |
 | File > Project name... | `p.set_name("Jet_30")` |
 | Pre-processing > Run step > Singular | `p.preprocess()` → `BatchResult` |
-| PIV/PTV > Run step > Singular | `p.run_piv(force=False)` → `BatchResult` (pre-processes first if needed; continues a stopped run) |
+| Velocimetry > Run step > Singular | `p.run_piv(force=False)` → `BatchResult` (pre-processes first if needed; continues a stopped run) |
 | Post-processing > Run step > Singular | `p.postprocess(overwrite=False)` → `(status, message)` |
 | The three steps | `p.run(steps=("preprocessing", "piv", "postprocessing"))` |
 | The images, the results | `p.images`, `p.results_folders()` (by pipeline: `{"PaIRS": ..., "TracTrac": ...}`; `vh.pipelines`), `p.name`; `p.set_postprocessing(results="TracTrac")` (`"PIV"`, `"PTV"` of the previous versions: their pipeline) |
@@ -181,7 +181,7 @@ with vh.PODBackgroundRemoval("D:/Jet/Run_30", pattern="*.tif") as session:
 
 ---
 
-## 2. Processing — PIV/PTV
+## 2. Processing — Velocimetry (PIV/PTV)
 
 ### Engines and their settings
 
@@ -309,7 +309,7 @@ print(post.metrics())                                   # the key numbers, as in
 | Interface | API |
 |---|---|
 | Pre-processing > Batch... | `vh.batch.preprocess_folder(folder, section)` per project |
-| PIV/PTV > Batch... | `vh.batch.process_folder(folder, engine=..., settings=..., n_modes=..., contrast=..., masks=..., regression=...)`, or `process_folders(roots, ...)` |
+| Velocimetry > Batch... | `vh.batch.process_folder(folder, engine=..., settings=..., n_modes=..., contrast=..., masks=..., regression=...)`, or `process_folders(roots, ...)` |
 | Post-processing > Batch... | `vh.batch.postprocess_folder(folder, camera, settings, figures=..., maps=..., videos=...)`, `postprocess_folders(...)` |
 | The window Batch itself | `python -m velocihub.batch_run job.json` (job format in `velocihub/batch_run.py`) |
 
@@ -395,6 +395,6 @@ class MyPIV(PIVEngine):
         ...
 ```
 
-Registered engines appear in the PIV/PTV page and the batch automatically, and each is a pipeline
+Registered engines appear in the Velocimetry page and the batch automatically, and each is a pipeline
 (`velocihub/pipelines.py`): its results in the column Velocimetry of the panel Projects and in the results of the
 batch post-processing, its figures exported to `PostProcessing/[label]`.
