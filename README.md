@@ -1,6 +1,10 @@
 # VelociHub
 
-VelociHub covers the entire particle velocimetry pipeline, from pre-processing, to processing, to post-processing with various fields and quantities able to be observed, in one Graphical Interface or via Python :
+VelociHub covers the entire particle velocimetry pipeline, from pre-processing, to processing, to post-processing with various fields and quantities able to be observed, in one Graphical Interface or via Python.
+
+Be aware that this tool is vibe coded, but validated with established PIV solutions (DynamicStudio from Dantec Dynamics). That said, bugs and incoherences may still occur, despite heavy unit and manual testing. Do not hesitate to report any issues you may find or contribute ideas to improve the software.
+
+The documentation is also work-in-progress, with the first main objective to go over the tooltips of the software to streamline the help queues given to the user. The documentation of the repository is also work-in-progress. Keep in mind that this tool was built during a lab which lasted two weeks, past that time frame, it's a hobby project essentially.
 
 | Part | What it does |
 |---|---|
