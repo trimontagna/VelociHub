@@ -1,6 +1,6 @@
 # VelociHub
 
-VelociHub takes a set of PIV images all the way to velocity fields and their figures, in one interface or from Python:
+VelociHub covers the entire particle velocimetry pipeline, from pre-processing, to processing, to post-processing with various fields and quantities able to be observed, in one Graphical Interface or via Python :
 
 | Part | What it does |
 |---|---|
