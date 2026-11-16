@@ -268,7 +268,7 @@ class Case:
         return FLOWS[self.key]()
 
 
-# The tolerances: the values of VelociHub 1.1 (SPICY defaults, spicy_vki 1.1.2) with a margin of about 30 %. The
+# The tolerances: the values of VelociHub 1.2 (SPICY defaults, spicy_vki 1.1.2) with a margin of about 30 %. The
 # vorticity in 1/pair (shown in 10⁻³/pair).
 def _cases():
     return [

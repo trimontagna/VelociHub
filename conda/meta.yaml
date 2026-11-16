@@ -3,7 +3,7 @@
 # then install the package built:  conda install -c local -c conda-forge velocihub
 # See docs/packaging.md. The optional packages (PTV, regression, videos) are not dependencies of the recipe:
 #   add them to the environment (conda install -c conda-forge imutils parse h5py imageio-ffmpeg).
-{% set version = "1.1.0" %}
+{% set version = "1.2.0" %}
 
 package:
   name: velocihub

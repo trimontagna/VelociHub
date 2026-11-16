@@ -160,14 +160,14 @@ Not modelled yet:
 ## Checks and known issues
 
 A **check** compares a metric with a tolerance, or with another method's metric. The verification checks, against the
-samples and through the chain, must hold to the rounding of the files (10⁻⁴ px). The others use VelociHub 1.1's own
+samples and through the chain, must hold to the rounding of the files (10⁻⁴ px). The others use VelociHub 1.2's own
 values with a margin of about 30 %. The runs are deterministic: the seeds are fixed, and SPICY's clustering is too. So
 a failed check is either a regression, or an improvement that should tighten its tolerance in `cases.py`.
 
 A **known issue** is a check expected to fail, with its reason. It is reported apart from the failures and is an
 `xfail` in the tests. When it starts passing it is reported, and its test fails, so that it becomes a normal check.
 
-The known issues of VelociHub 1.1 (SPICY defaults), all at the processing level:
+The known issues of VelociHub 1.2 (SPICY defaults), all at the processing level:
 
 | Issue | Seen in |
 |---|---|
