@@ -1,6 +1,7 @@
 """The PIV and PTV engines on the synthetic images (the displacement of the jet known): the results of PaIRS-UniNa and
 TracTrac as the post-processing reads them, and their accuracy. Skipped when the engine isn't installed."""
 
+import json
 import os
 
 import numpy as np
@@ -49,4 +50,32 @@ def test_tractrac(copy):
     pytest.importorskip("imutils")
     post = run("tractrac", {"spacing": 16, "vid_loop": 0}, copy)
     assert post.ptv() and post.fields.tracks
+    check_jet(post)
+
+
+def test_tractrac_spicy_fits_the_particles(copy):
+    """TracTrac then SPICY: each pair is fitted on the links of its particles (without masks: exactly those binned in
+    the cells of the grid, more than the cells), evaluated on the grid; the binned cells are kept as the raw fields.
+    The jet is still measured."""
+    pytest.importorskip("imutils")
+    pytest.importorskip("spicy_vki")
+    folder = copy("images")
+    images = sorted(os.path.join(folder, "PreProcessing", n) for n in os.listdir(os.path.join(folder, "PreProcessing"))
+                    if n.endswith(".tif"))
+    engine = piv.get_engine("tractrac")
+    run = piv.PIVRun(images, None, "tractrac", {"spacing": 16, "vid_loop": 0},
+                     os.path.join(folder, engine.results_folder), info={"measurement_folder": folder},
+                     regression={"method": "spicy"})
+    path = run.run(report=lambda message: None)
+    with np.load(path) as z:
+        settings = json.loads(str(z["settings"]))
+        n_points, residual = z["regression_n_points"], z["regression_residual_px"]
+        binned = z["ptv_particles"].reshape(len(n_points), -1).sum(1)
+        cells = z["x_px"].size
+        assert "raw_u_px" in z.files and "raw_info" in z.files
+    assert settings["regression_data"] == "particles"
+    assert np.array_equal(n_points, binned) and np.all(n_points > cells)
+    # RMS at the particles (px): the jet, and the few links TracTrac gets wrong (no outlier test on the particles)
+    assert np.all(np.isfinite(residual)) and np.median(residual) < 1
+    post = vh.PostProcessing(vh.load_vectors(path, pixels=True), vh.PostSettings())
     check_jet(post)

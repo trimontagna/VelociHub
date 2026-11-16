@@ -10,7 +10,8 @@ PIV/PTV *engine*:
   tracks of the particles. Vendored in `velocihub/piv/tractrac`.
 
 An optional **regression** (SPICY, constrained radial basis functions, VKI) can follow either engine, to fill the
-gaps of invalid vectors and smooth the noise.
+gaps of invalid vectors and smooth the noise. SPICY fits scattered data: after TracTrac it fits the particles of each
+pair themselves (not the binned cells), after PaIRS its valid vectors; the fit is evaluated on the grid.
 
 Modules: `velocihub/piv/` (`base.py`: `PIVRun`, `Camera`, engines; `pairs_engine.py`; `ptv_engine.py`;
 `regression.py`; `particles.py`), page: `velocihub/gui/piv_page.py`. Other engines can be added: subclass
@@ -113,9 +114,9 @@ max(R, G, B) of a colour image).
 
 | Interface | API (`regression={"method": "spicy", "settings": {...}}`) | Default | Meaning |
 |---|---|---|---|
-| Regression: None / SPICY | `method` | `"none"` | Fit each displacement field after the PIV/PTV. |
+| Regression: None / SPICY | `method` | `"none"` | Fit each displacement field after the PIV/PTV: PTV, the links of the particles of each pair (at the middle of their two positions, with their displacement; those in masked cells left out); PIV, its valid vectors. Evaluated at the grid points with flow. |
 | RBF basis | `basis` | `"gauss"` | Gaussian RBFs or `c4` (compact support: faster, slightly less smooth). |
-| Points per RBF (per level) | `n_k` | `(4,)` | Vectors each RBF covers, one number per level (e.g. `(4, 10)`: fine + coarse). Fewer: closer fit, slower. |
+| Points per RBF (per level) | `n_k` | `(4,)` | Data (vectors, or particles after a PTV) each RBF covers, one number per level (e.g. `(4, 10)`: fine + coarse). Fewer: closer fit, slower. |
 | Collocation | `method` (of the settings) | `"clustering"` | Where RBFs are placed: k-means `clustering`, Halton `semirandom`, or `regular` grid. |
 | RBF radius min / max (image width) | `r_min` / `r_max` | 0.01 / 0.3 | Smallest/largest RBF radius as a fraction of the image width. |
 | RBF value at the nearest RBF | `eps_l` | 0.7 | Value of an RBF at its nearest neighbour (0-1), which sets its radius. |
@@ -123,8 +124,10 @@ max(R, G, B) of a colour image).
 | Harmonic basis functions | `n_hb` | 0 | Sines and cosines added for global trends. |
 | Condition number | `k_cond` | 1e12 | Regularization of the fit matrix. |
 
-`vectors.npz` then holds the regressed fields, plus the raw ones (`raw_u_px`, `raw_v_px`, `raw_info`) and the
-residual of each fit. The quality figures keep using the raw PIV/PTV validity.
+`vectors.npz` then holds the regressed fields, plus the raw ones (`raw_u_px`, `raw_v_px`, `raw_info`: the binned
+cells of a PTV, set by its grid spacing, min. particles per cell and median test), the residual of each fit (RMS at the
+data fitted, px) and the number of data fitted (`regression_n_points`). The quality figures keep using the raw PIV/PTV
+validity, and the grid points out of the flow (valid in less than 10 % of the pairs) are not evaluated.
 
 ### Particles in the windows (diagnostic only)
 

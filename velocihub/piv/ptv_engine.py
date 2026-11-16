@@ -6,8 +6,8 @@ back and forth over the sequence) predicting their displacement; it runs in its 
 Python interpreter of the interface. The particles tracked give the links of the pairs of consecutive frames, binned
 on the grid of the PIV (cells of the grid spacing centred on its points, those of PaIRS with 32 px windows and 50 %
 overlap by default): the vector fields, as those of the other engines, with the number of particles of each cell
-(raw.npz: count) and the tracks (tracks.npz). It needs the pairs of a sequence: (k, k + 1) of every image, or of every
-frame_step images.
+(raw.npz: count), the links themselves (links.npz: what a regression with SPICY fits, evaluated on the same grid) and
+the tracks (tracks.npz). It needs the pairs of a sequence: (k, k + 1) of every image, or of every frame_step images.
 """
 
 import importlib.util
@@ -58,9 +58,11 @@ class TracTracEngine(PIVEngine):
         Parameter("spacing", "Grid spacing / bin size (px)", 16, "int",
                   "The displacements of the particles of each pair are averaged in cells of this size centred on the "
                   "points of the grid: 16 px gives the grid of PaIRS with 32 px windows and 50 % overlap, so that the "
-                  "PTV and the PIV compare point by point."),
+                  "PTV and the PIV compare point by point. With the regression SPICY, the particles themselves are "
+                  "fitted and the fit is evaluated on this grid; the binned cells are kept beside (raw fields)."),
         Parameter("min_particles", "Min. particles per cell", 1, "int",
-                  "A cell with fewer particles in a pair is invalid in that pair."),
+                  "A cell with fewer particles in a pair is invalid in that pair (binned fields; with SPICY, the "
+                  "grid points valid in less than 10 % of the pairs are out of the flow, not evaluated)."),
         Parameter("median_test", "Median test threshold (0: none)", 2.0, "float",
                   "Normalized median test of each cell against its 8 neighbours (Westerweel & Scarano 2005, noise "
                   "0.1 px): a cell above this threshold is invalid, as is a cell with fewer than 2 valid neighbours."),
