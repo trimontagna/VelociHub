@@ -15,7 +15,9 @@ Results, in the folder of the PIV (subfolder PIV of the image folder by default,
                      also x_mm, y_mm, x_global_mm (from the origin of the axes of the camera, Camera.x_shift and
                      y_shift, y upwards), U, V (m/s) and t_s (time of the first image of each pair); with a regression
                      (regression.py), u_px, v_px and info are those of the regression, and raw_u_px, raw_v_px,
-                     raw_info those of the PIV, with regression_residual_px and regression_n_rbf per map
+                     raw_info those of the PIV (the binned cells of a PTV), with regression_residual_px,
+                     regression_n_rbf, regression_n_points (the data fitted: the particles of a PTV) and
+                     regression_n_rejected (the links of a PTV left out by the outlier test) per map
     settings.json    every setting used, and the run time (run_time_s, run_time, seconds_per_pair, resumed_pairs)
     tracks.npz       TracTrac: the particles tracked (ptv_engine.py)
 The project is the name of the folder of the images unless another one is given.
@@ -475,7 +477,8 @@ class PIVRun:
                 self.process.kill()
                 raise RuntimeError(reason)
             self.process = ChainProcess(self.process, lambda done: start_regression(
-                self.work, self.regression, self.raw_status().tolist(), self.width, key))
+                self.work, self.regression, self.raw_status().tolist(), self.width, key,
+                particles=self.engine.method == "PTV"))
         return self.process
 
     def raw_status(self):
@@ -534,16 +537,23 @@ class PIVRun:
             with np.load(os.path.join(self.work, "regressed.npz")) as reg:
                 ru, rv, rinfo, residual, n_rbf, rfailed = (reg[k] for k in ("u", "v", "info", "residual", "n_rbf",
                                                                              "failed"))
+                n_points = reg["n_points"] if "n_points" in reg.files else None
+                n_rejected = reg["n_rejected"] if "n_rejected" in reg.files else None
             arrays, settings = self.vectors(xpx, ypx, ru, rv, sn, rinfo, self.pairs, failed,
                                             status=self.status(xpx, ypx, info == 1), count=count,
                                             tracks=tracks is not None)
             arrays.update(raw_u_px=u, raw_v_px=-v, raw_info=info, regression_residual_px=residual,
                           regression_n_rbf=n_rbf)
+            if n_points is not None:
+                arrays["regression_n_points"] = n_points
+            if n_rejected is not None:
+                arrays["regression_n_rejected"] = n_rejected
             finite = residual[np.isfinite(residual)]
             settings.update(regression=regression_record(self.regression),
                             regression_description=describe_regression(self.regression),
                             regression_failed_maps=rfailed.tolist(),
                             regression_median_residual_px=float(np.median(finite)) if finite.size else None,
+                            regression_data="particles" if self.engine.method == "PTV" else "vectors",
                             regression_seconds=(done or {}).get("regression_seconds"))
         os.makedirs(self.output, exist_ok=True)
         # The files of a previous PIV of the project are replaced (with the CSV files of the vector maps and of the

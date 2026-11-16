@@ -16,6 +16,11 @@ import pytest  # noqa: E402
 import synthetic  # noqa: E402
 
 
+def pytest_addoption(parser):
+    parser.addoption("--benchmark-report", default=None, metavar="FOLDER",
+                     help="write the report of the benchmark (test_benchmark.py) in this folder")
+
+
 @pytest.fixture(scope="session")
 def measurements(tmp_path_factory):
     """The synthetic measurements, built once: "piv" (PIV results), "both" (PIV and PTV results), "ptv" (PTV

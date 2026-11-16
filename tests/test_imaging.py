@@ -52,14 +52,19 @@ def test_raw_images_removed(copy):
 
 
 def test_pod_sum_is_the_background_removed(measurements):
-    """The raw image minus the sum of the modes removed (each weighted by the temporal coefficient of the image) is
-    the image the pre-processing exported, to the count."""
+    """The raw image minus the sum of the modes removed (each weighted by the temporal coefficient of the image),
+    plus the offset after the removal (recorded with the images exported), is the image the pre-processing exported,
+    to the count."""
+    from velocihub.preprocessing import read_manifest
+
     post = post_of(measurements["piv"], pod_mode=1, pod_mode_last=s.MODES_REMOVED, pod_combine=True)
     piv_images, raw = post.image_files()
+    offset = read_manifest(os.path.dirname(piv_images[0]))["background_offset"]
+    assert offset > 0
     for k in (0, 6, post.fields.n - 1):
         i = post.fields.settings["pairs"][k][0]
         A = imread(raw[i])
-        expected = cast_like(A.astype(np.float64) - post.pod_background(k), A)
+        expected = cast_like(A.astype(np.float64) - post.pod_background(k) + offset, A)
         np.testing.assert_array_equal(expected, imread(piv_images[i]))
 
 

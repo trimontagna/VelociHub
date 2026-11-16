@@ -117,10 +117,12 @@ def relative(path, root):
 
 def comparable_recipe(record):
     """A recipe record (recipe_record) without the training folder that the previous versions kept in it (an
-    absolute path): the records of the same recipe are equal wherever the folder of the project is."""
+    absolute path): the records of the same recipe are equal wherever the folder of the project is. The previous
+    versions added no offset after the background removal: 0."""
     if not record or not record.get("background_removal"):
         return record
     removal = {k: v for k, v in record["background_removal"].items() if k != "training_folder"}
+    removal.setdefault("offset", 0)
     return {**record, "background_removal": removal}
 
 

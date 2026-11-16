@@ -9,14 +9,15 @@ tractrac() for an image sequence, without its plots and files, calling the funct
 model) as they are: the motion model is trained over vid_loop passes back and forth, and the tracks are those of the
 last pass, forward. A particle tracked at a frame is linked to the frames before and after it (the links checked both
 ways and by the motion model): each pair has the links of the particles tracked at its two frames (their
-displacement, at the middle of their two positions), binned on the grid (cells of the grid spacing centred on its
-points): mean displacement of the cell, number of particles and their mean position (where SPICY fits the cell). The
+displacement, at the middle of their two positions), kept as they are (links.npz: what SPICY fits) and binned on the
+grid (cells of the grid spacing centred on its points): mean displacement of the cell and number of particles. The
 cells with fewer than min_particles particles, or rejected by the normalized median test, are invalid.
 
 The state of the tracking (with the random numbers of the detection) is saved every CHECKPOINT frames and when
 stopped (file STOP), so that a computation stopped or interrupted continues where it was, with the same results. At
-the end: raw.npz (xpx, ypx, u, v, info, count, cx, cy, failed: the binned pairs, as the other engines give them) and
-tracks.npz (the particles tracked). The messages are JSON lines on the standard output: progress (phase training,
+the end: raw.npz (xpx, ypx, u, v, info, count, failed: the binned pairs, as the other engines give them), links.npz (k,
+x, y, u, v: the links of each pair k, at the middle of their two positions, and their displacement, px) and tracks.npz
+(the particles tracked). The messages are JSON lines on the standard output: progress (phase training,
 then pairs), field, log, done, stopped or error.
 """
 import glob
@@ -42,6 +43,9 @@ SEED = 0  # Of the random numbers of the detection (TracTrac breaks the ties bet
 PEAK_CONV = {"none": 0, "dog": 1, "log": 2, "shi-tomasi": 3}
 PEAK_SUBPIX = {"quadratic": 0, "gaussian": 1}
 ROWS = ("frame", "id", "x", "y", "u", "v", "ax", "ay", "err")
+LINKS = ("k", "x", "y", "u", "v")
+# Version of the files of the progress: the progress saved by another version is discarded
+FORMAT = 2
 
 
 def load_greyscale():
@@ -117,7 +121,7 @@ def median_test(u, v, ok, threshold):
 
 def bin_links(a, b, grid, s):
     """The links of a pair (positions at its first and second frames: a, b) binned on the grid: mean displacement u, v
-    of each cell (NaN without particle), number of particles, their mean position, and the valid cells."""
+    of each cell (NaN without particle), the valid cells and the number of particles."""
     x, y, spacing = np.asarray(grid["x"]), np.asarray(grid["y"]), grid["spacing"]
     h, w = len(y), len(x)
     d, m = b - a, (a + b) / 2
@@ -126,14 +130,22 @@ def bin_links(a, b, grid, s):
     inside = (col >= 0) & (col < w) & (row >= 0) & (row < h)
     cell = row[inside] * w + col[inside]
     count = np.bincount(cell, minlength=h * w).reshape(h, w)
-    sums = [np.bincount(cell, q[inside], minlength=h * w).reshape(h, w) for q in (d[:, 0], d[:, 1], m[:, 0], m[:, 1])]
+    sums = [np.bincount(cell, q[inside], minlength=h * w).reshape(h, w) for q in (d[:, 0], d[:, 1])]
     with np.errstate(invalid="ignore", divide="ignore"):
-        u, v, cx, cy = (np.where(count > 0, q / count, np.nan) for q in sums)
+        u, v = (np.where(count > 0, q / count, np.nan) for q in sums)
     ok = count >= s["min_particles"]
     if s["median_test"] > 0:
         ok = median_test(u, v, ok, s["median_test"])
-    return (u.astype(np.float32), v.astype(np.float32), ok.astype(np.int16), np.minimum(count, 32767).astype(np.int16),
-            cx.astype(np.float32), cy.astype(np.float32))
+    return u.astype(np.float32), v.astype(np.float32), ok.astype(np.int16), np.minimum(count, 32767).astype(np.int16)
+
+
+def pair_links(k, a, b):
+    """The links of the pair k (positions a, b at its two frames) as links.npz keeps them: at the middle of their two
+    positions, with their displacement (px, x to the right and y down)."""
+    a, b = np.asarray(a, np.float64).reshape(-1, 2), np.asarray(b, np.float64).reshape(-1, 2)
+    m, d = (a + b) / 2, b - a
+    return dict(k=np.full(len(a), k, np.int32), x=m[:, 0].astype(np.float32), y=m[:, 1].astype(np.float32),
+                u=d[:, 0].astype(np.float32), v=d[:, 1].astype(np.float32))
 
 
 def save_latest(work, k, grid, u, v, info):
@@ -214,7 +226,7 @@ class Tracking:
         self.chunks, self.pairs_done, self.seconds = 0, 0, 0.0
         self.detected = np.full(n, -1, np.int32)
         self.tracked = np.full(n, -1, np.int32)
-        self.rows, self.binned = [], []
+        self.rows, self.binned, self.links = [], [], []
 
     def sequence(self):
         """Frames read by the loop (N) and their time steps (dt), as tractrac() builds them."""
@@ -231,11 +243,13 @@ class Tracking:
         """Save the frames tracked since the last save (a chunk) and the state."""
         chunk = os.path.join(self.work, f"ptv_chunk_{self.chunks:05d}.npz")
         rows = {q: np.concatenate([r[q] for r in self.rows]) if self.rows else np.array([]) for q in ROWS}
-        binned = {q: np.array([b[q] for b in self.binned]) for q in ("k", "u", "v", "info", "count", "cx", "cy")}
+        binned = {q: np.array([b[q] for b in self.binned]) for q in ("k", "u", "v", "info", "count")}
+        links = {q: np.concatenate([lk[q] for lk in self.links]) if self.links else np.array([]) for q in LINKS}
         replace_file(chunk, lambda f: np.savez(f, **{f"row_{q}": a for q, a in rows.items()},
-                                               **{f"pair_{q}": a for q, a in binned.items()}))
+                                               **{f"pair_{q}": a for q, a in binned.items()},
+                                               **{f"link_{q}": a for q, a in links.items()}))
         self.chunks += 1
-        self.rows, self.binned = [], []
+        self.rows, self.binned, self.links = [], [], []
         state = dict(i=self.i, v=self.v, th=self.th, mask_shape=self.mask.shape, pending=self.pending,
                      prev_ids=self.prev_ids, chunks=self.chunks, pairs_done=self.pairs_done, seconds=self.seconds,
                      detected=self.detected, tracked=self.tracked, random=np.random.get_state())
@@ -255,13 +269,14 @@ class Tracking:
         for path in glob.glob(os.path.join(self.work, "ptv_chunk_*.npz")):
             if int(os.path.basename(path)[10:15]) >= self.chunks:
                 os.remove(path)
-        self.rows, self.binned = [], []
+        self.rows, self.binned, self.links = [], [], []
         return True
 
     def pair(self, k, a, b):
-        """Bin the links of the pair k (positions a, b at its two frames)."""
-        u, v, info, count, cx, cy = bin_links(a, b, self.grid, self.s)
-        self.binned.append(dict(k=k, u=u, v=v, info=info, count=count, cx=cx, cy=cy))
+        """Keep and bin the links of the pair k (positions a, b at its two frames)."""
+        u, v, info, count = bin_links(a, b, self.grid, self.s)
+        self.binned.append(dict(k=k, u=u, v=v, info=info, count=count))
+        self.links.append(pair_links(k, a, b))
         self.pairs_done = k + 1
         return u, v, info
 
@@ -380,16 +395,16 @@ class Tracking:
 def compute(job, work):
     stop_file = os.path.join(work, "STOP")
     # The progress saved by another computation (other images, sequence or settings) is discarded
-    key_file = os.path.join(work, "key.json")
+    key_file, key = os.path.join(work, "key.json"), {"key": job["key"], "format": FORMAT}
     if os.path.isfile(key_file):
         with open(key_file) as f:
-            same = json.load(f) == job["key"]
+            same = json.load(f) == key
         if not same:
             for name in os.listdir(work):
-                if name.startswith(("ptv_", "raw", "tracks", "latest")):
+                if name.startswith(("ptv_", "raw", "tracks", "latest", "links")):
                     os.remove(os.path.join(work, name))
     with open(key_file, "w") as f:
-        json.dump(job["key"], f)
+        json.dump(key, f)
     tracking = Tracking(job, work)
     n = tracking.n
     n_pairs = n - 1
@@ -473,14 +488,14 @@ def pair_particles(work, chunks):
 
 
 def gather(tracking, work):
-    """The chunks gathered: raw.npz (the binned pairs) and tracks.npz (the particles tracked)."""
+    """The chunks gathered: raw.npz (the binned pairs), links.npz (the links of the pairs) and tracks.npz (the
+    particles tracked)."""
     grid, n_pairs = tracking.grid, tracking.n - 1
     xpx, ypx = np.meshgrid(np.asarray(grid["x"], float), np.asarray(grid["y"], float))
     shape = (n_pairs,) + xpx.shape
     pairs = dict(u=np.full(shape, np.nan, np.float32), v=np.full(shape, np.nan, np.float32),
-                 info=np.zeros(shape, np.int16), count=np.zeros(shape, np.int16),
-                 cx=np.full(shape, np.nan, np.float32), cy=np.full(shape, np.nan, np.float32))
-    rows = {q: [] for q in ROWS}
+                 info=np.zeros(shape, np.int16), count=np.zeros(shape, np.int16))
+    rows, links = {q: [] for q in ROWS}, {q: [] for q in LINKS}
     for c in range(tracking.chunks):
         with np.load(os.path.join(work, f"ptv_chunk_{c:05d}.npz")) as z:
             for k_index, k in enumerate(z["pair_k"].tolist() if z["pair_k"].size else []):
@@ -489,11 +504,19 @@ def gather(tracking, work):
             for q in ROWS:
                 if z[f"row_{q}"].size:
                     rows[q].append(z[f"row_{q}"])
+            for q in LINKS:
+                if z[f"link_{q}"].size:
+                    links[q].append(z[f"link_{q}"])
     dtypes = dict(frame=np.int32, id=np.int64)
     rows = {q: np.concatenate(r).astype(dtypes.get(q, np.float32)) if r else np.array([], dtypes.get(q, np.float32))
             for q, r in rows.items()}
     replace_file(os.path.join(work, "raw.npz"), lambda f: np.savez(f, xpx=xpx, ypx=ypx, failed=np.array([], int),
                                                                    **pairs))
+    # Links sorted by pair (stable: in the order tracked within a pair)
+    links = {q: np.concatenate(a) if a else np.array([], np.int32 if q == "k" else np.float32)
+             for q, a in links.items()}
+    order = np.argsort(links["k"], kind="stable")
+    replace_file(os.path.join(work, "links.npz"), lambda f: np.savez(f, **{q: a[order] for q, a in links.items()}))
     th = {k: (float(v) if isinstance(v, (int, float, np.number)) else v) for k, v in tracking.th[0].items()}
     replace_file(os.path.join(work, "tracks.npz"), lambda f: np.savez(
         f, **rows, detected=tracking.detected, tracked=tracking.tracked,

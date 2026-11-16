@@ -72,7 +72,7 @@ p.run()                     # Run step > Singular of the three pages: preprocess
 | The POD session of the page Pre-processing | `with p.session() as s: ...` (recipe applied, modes saved restored) |
 | The vector fields / the post-processing of the page | `p.vector_fields()`, `p.post_processing()` (then `.plot(key)`, `.metrics()`, `.export(...)`) |
 
-`set_preprocessing(masks, masks_file, contrast, filters, stage, background_removal, modes_removed, export_folder, export_format,
+`set_preprocessing(masks, masks_file, contrast, filters, stage, background_removal, modes_removed, background_offset, export_folder, export_format,
 **filter_parameters)`, `set_piv(engine, settings, regression, output_folder, **engine_settings)` and
 `set_postprocessing(results, space, camera, settings, export_folder, figures, videos, fps, video_format, video_maps,
 maps, clims, cmaps, contours, compares, **recipe)` change only what they are given. The parameters are those of the
@@ -145,9 +145,9 @@ with vh.PODBackgroundRemoval("D:/Jet/Run_30", pattern="*.tif") as session:
 | No filter ticked | `session.set_contrast(enabled=False)` or `set_contrast([])` |
 
 Filter names and parameters: `capping` (`cap_n`), `minmax` (`mm_window`, `mm_contrast`), `clahe` (`clip`, `tiles`),
-`edge` (`edge_sigma`, `edge_factor`); `stage="pre"` or `"post"` — see [preprocessing.md](preprocessing.md). The
+`edge` (`edge_sigma`, `edge_factor`), `gaussian` (`gm_sigma`, `gm_contrast`); `stage="pre"` or `"post"` — see [preprocessing.md](preprocessing.md). The
 filters also exist as functions (`vh.intensity_capping(A, n)`, `vh.minmax_normalization(A, window, min_contrast)`,
-`vh.clahe(A, clip, tiles)`, `vh.edge_enhancement(A, sigma, factor)`).
+`vh.clahe(A, clip, tiles)`, `vh.edge_enhancement(A, sigma, factor)`, `vh.gaussian_matching(A, sigma, min_contrast)`).
 
 ### POD modes
 
@@ -164,6 +164,7 @@ filters also exist as functions (`vh.intensity_capping(A, n)`, `vh.minmax_normal
 | Interface | API |
 |---|---|
 | Remove the background, Modes removed | the argument `n_modes_removed` of the calls below (0: none) |
+| Offset (grey levels) | `session.background_offset = "auto"` (or a number; 0: clipped at 0) |
 | Run step > Singular (Ctrl+B) to the export folder | `paths = session.export_images(session.export_folder(), n_modes_removed=6)` |
 | (the PIV's "use the export, or export first") | `paths = session.piv_images(n_modes_removed=6)` |
 | Export > New images | `session.remove_background("out", n_modes_removed=6, folder="D:/Jet/Run_31", pattern="*.tif")` |
@@ -265,6 +266,8 @@ settings = vh.PostSettings(
     l_ref=50,                          # ... reference length (mm)
     rolling=False, rolling_maps=100,   # Rolling statistics
     peak_locking_bins=21,              # Peak locking
+    gradient_sigma=0.5,                # Gradients: smoothing (cells; 0: none)
+    gradient_smooth_after=False,       # ... the differences first, then the smoothing (walls)
     jet_theory=True,                   # Jet theory add-on (velocihub/jet): the potential core
     core_mode="level", core_level=95,
     n_stations=6, first_offset=0, core_u_ref=None,

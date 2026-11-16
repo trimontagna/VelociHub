@@ -76,13 +76,13 @@ def release(gui, slider, first, last, handle):
 
 
 def test_side_panel(gui):
-    """Peak locking and POD inside the box Miscellaneous, the POD modes and the text in POD; the jet theory in the box
+    """Peak locking, Gradients and POD inside the box Miscellaneous, the POD modes and the text in POD; the jet theory in the box
     Add-ons below it, its settings hidden when it is off."""
     panel = gui.app.page("post").panel
     top = [title(w) for w in panel.inner.winfo_children() if w.winfo_class() == "TLabelframe"]
     assert top[-2:] == ["Miscellaneous", "Add-ons"] and "Peak locking" not in top and "Jet theory (add-on)" not in top
     inside = [w for w in panel.misc.winfo_children() if w.winfo_class() == "TLabelframe"]
-    assert [title(w) for w in inside] == ["Peak locking", "POD"]
+    assert [title(w) for w in inside] == ["Peak locking", "Gradients", "POD"]
     pod = descendants(inside[-1])
     assert panel.pod_slider in pod and panel.pod_label in pod and all(b in pod for b in panel.pod_buttons)
     assert [title(w) for w in panel.addons.winfo_children() if w.winfo_class() == "TLabelframe"] == [
@@ -158,6 +158,25 @@ def test_tile_labels():
     assert {k: short_title(k) for k in expected} == expected
     labels = [short_title(k) for k in FIGURE_TITLES]
     assert all(len(label) <= 14 and not set(label) & set(r"\%_^{}" + "̄") for label in labels), labels
+
+
+def test_gradient_settings(gui, copy, tmp_path):
+    """Miscellaneous > Gradients: the smoothing σ and the toggle Smooth after differencing reach the
+    post-processing (and the titles of the gradient maps); the panel shows the recipe back."""
+    copy("piv", "campaign", "m")
+    page, _ = open_project(gui, str(tmp_path / "campaign"), "m")
+    panel = page.panel
+    assert panel.vars["gradient_sigma"].get() == "0.5" and not panel.gradient_smooth_after.get()
+    panel.vars["gradient_sigma"].set("1")
+    panel.gradient_smooth_after.set(True)
+    page.apply_settings()
+    gui.root.update()
+    s = page.post.settings
+    assert s.gradient_sigma == 1 and s.gradient_smooth_after
+    assert "σ = 1 cells after the differences" in page.post.smoothing_text()
+    panel.show(replace(s, gradient_sigma=0.5, gradient_smooth_after=False))
+    assert panel.vars["gradient_sigma"].get() == "0.5" and not panel.gradient_smooth_after.get()
+    page.apply_settings()
 
 
 def test_map_cursor(gui, copy, tmp_path):

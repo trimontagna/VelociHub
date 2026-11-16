@@ -8,7 +8,7 @@ to cite (None: none).
 
 from dataclasses import dataclass
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 AUTHOR = "Tristan Montagnier"
 AUTHOR_EMAIL = "tristanmontagnier@gmail.com"

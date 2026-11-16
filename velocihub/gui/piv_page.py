@@ -109,7 +109,10 @@ OUTPUT_HELP = ("The vector fields (vectors.npz) and the settings (settings.json)
 
 
 REGRESSION_HELP = ("Optional fit of each vector field after the PIV/PTV with SPICY (constrained radial basis "
-                   "functions, von Karman Institute). It fills the gaps of the invalid vectors and smooths the noise: "
+                   "functions, von Karman Institute), evaluated on the grid. After a PTV it fits the particles of each "
+                   "pair themselves (their displacements between the two frames), not the binned cells; after a PIV, "
+                   "its valid vectors. Without it, the PTV gives the binned cells (Grid spacing / bin size, Min. "
+                   "particles per cell, Median test). It fills the gaps of the invalid vectors and smooths the noise: "
                    "the post-processing then uses the regressed fields, while the quality of the PIV/PTV (valid "
                    "vectors, peak ratio or particles per cell) stays that of the PIV/PTV, whose fields vectors.npz "
                    "also keeps. It runs after the PIV/PTV, a few seconds per map, and continues from the maps fitted "

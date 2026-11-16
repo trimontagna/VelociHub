@@ -74,14 +74,14 @@ from .piv import PIV_FOLDER, Camera, PIVEngine, PIVRun, get_engine, register, ru
 from .fields import VectorFields, load_vectors
 from .postprocessing import FIGURES, POSTPROCESSING_FOLDER, PostProcessing, PostSettings
 from .preprocessing import (FILTERS, POD_FILE, PREPROCESSING_FOLDER, STAGES, ContrastSettings, Mask,
-                            PODBackgroundRemoval, clahe, draw_spectrum, edge_enhancement, imread, imwrite,
+                            PODBackgroundRemoval, clahe, draw_spectrum, edge_enhancement, gaussian_matching, imread, imwrite,
                             intensity_capping, minmax_normalization)
 from .project import PROJECT_FILE, read_project
 
 __all__ = ["__author__", "__version__", "Project", "api", "batch", "pipelines", "projects", "run", "settings", "stitch", "Camera", "ContrastSettings", "FIGURES", "FILTERS", "Mask", "PIVEngine",
            "PIVRun", "PIV_FOLDER", "PODBackgroundRemoval", "POD_FILE", "POSTPROCESSING_FOLDER", "PREPROCESSING_FOLDER",
            "PROJECT_FILE", "PostProcessing", "PostSettings", "STAGES", "VectorFields", "clahe", "draw_spectrum",
-           "edge_enhancement", "get_engine", "imread", "imwrite", "intensity_capping", "launch_gui", "load_vectors",
+           "edge_enhancement", "gaussian_matching", "get_engine", "imread", "imwrite", "intensity_capping", "launch_gui", "load_vectors",
            "jet", "minmax_normalization", "piv", "read_project", "register", "run_piv"]
 
 

@@ -185,8 +185,10 @@ FIGURE_FILES = {"velocity": "InstantaneousVelocity", "u": "InstantaneousU", "v":
                 "reynolds_gradient": "ReynoldsStressGradient", "reynolds_gradient_abs": "ReynoldsStressGradientAbs",
                 "vorticity_gradient": "MeanVorticityGradient", "vorticity_gradient_abs": "MeanVorticityGradientAbs",
                 **lagrangian.FIGURE_FILES, **imaging.FIGURE_FILES, **JET_FILES}
-# Smoothing of the maps of the gradients (cells, Gaussian, the holes ignored)
-GRADIENT_SIGMA = 1.5
+# Smoothing of the maps of the gradients by default (cells, Gaussian, the holes ignored: PostSettings.gradient_sigma).
+# 1.5 before VelociHub 1.2: the benchmark (docs/benchmark.md) showed it never the best on its flows, even with the
+# noise of a single map in the mean field
+GRADIENT_SIGMA = 0.5
 # Size of the figures exported that aren't maps (inches)
 FIGSIZE = {"convergence": (10, 5), "peak_locking": (10, 7), "peak_ratio_histogram": (8, 4.5), **lagrangian.FIGSIZE,
            **imaging.FIGSIZE, **JET_FIGSIZE}
@@ -261,13 +263,19 @@ class PostSettings(JetSettings, FieldSettings):
     n_stations, first_offset, core_u_ref); pod_mode, pod_mode_last: the modes of the POD of the images exported, the
     first and the last ones (from 1; None: the first one alone; one PNG each), the interface showing one of them;
     pod_combine: those modes summed instead, the background of the image of each map (each mode weighted by its
-    temporal coefficient, as the pre-processing subtracts it; imaging.py)."""
+    temporal coefficient, as the pre-processing subtracts it; imaging.py); the gradients (gradient_fields):
+    gradient_sigma, the smoothing of the mean fields (cells of the grid, Gaussian, the holes ignored; 0: none), and
+    gradient_smooth_after, the differences taken first (one-sided next to the masks and the edges) and smoothed
+    after, instead of the smoothed fields differenced: the same away from the masks and the edges, closer to the
+    gradient at a wall, and a value at the grid points next to it."""
 
     hold_maps: int = 0
     peak_locking_bins: int = PEAK_LOCKING_BINS
     pod_mode: int = 1
     pod_mode_last: int = None
     pod_combine: bool = False
+    gradient_sigma: float = GRADIENT_SIGMA
+    gradient_smooth_after: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -277,6 +285,11 @@ class PostSettings(JetSettings, FieldSettings):
         if self.pod_mode < 1:
             raise ValueError("Invalid post-processing settings: pod_mode (mode of the POD, from 1) >= 1")
         self.pod_combine = bool(self.pod_combine)
+        self.gradient_sigma = float(self.gradient_sigma if self.gradient_sigma is not None else 0)
+        if self.gradient_sigma < 0:
+            raise ValueError("Invalid post-processing settings: gradient_sigma (smoothing of the gradients, cells) "
+                             ">= 0")
+        self.gradient_smooth_after = bool(self.gradient_smooth_after)
         if self.pod_mode_last is not None:
             if float(self.pod_mode_last) != int(self.pod_mode_last):
                 raise ValueError("pod_mode_last must be an integer")
@@ -294,11 +307,34 @@ class PostSettings(JetSettings, FieldSettings):
         if self.hold_maps:
             steps.append(f"invalid cells of the instantaneous maps held (Sample&Hold, at most {self.hold_maps} "
                          "maps back)")
+        if self.gradient_sigma != GRADIENT_SIGMA or self.gradient_smooth_after:
+            steps.append(f"gradients smoothed over σ = {num2str(self.gradient_sigma)} cells"
+                         + (" after the differences" if self.gradient_smooth_after else ""))
         return steps + self.jet_steps()
 
 
 ################################################################################
 # Analyses
+
+
+def gradient_nan(F, coords, axis):
+    """dF/dcoords along axis of a field with holes (NaN), on a uniform grid: central differences where both
+    neighbours have a value, else one-sided (second order if two points on that side, else first order); NaN in
+    the holes and where neither neighbour has a value."""
+    F = np.moveaxis(np.asarray(F, np.float64), axis, 0)
+    h = float(coords[1] - coords[0])
+    n = F.shape[0]
+    pad = np.full((2,) + F.shape[1:], np.nan)
+    G = np.concatenate([pad, F, pad])
+    fm2, fm1, fp1, fp2 = G[0:n], G[1:n + 1], G[3:n + 3], G[4:n + 4]
+    with quiet():
+        options = ((fp1 - fm1) / (2 * h), (-3 * F + 4 * fp1 - fp2) / (2 * h), (3 * F - 4 * fm1 + fm2) / (2 * h),
+                   (fp1 - F) / h, (F - fm1) / h)
+    out = np.full(F.shape, np.nan)
+    for option in reversed(options):
+        out = np.where(np.isfinite(option), option, out)
+    out[~np.isfinite(F)] = np.nan
+    return np.moveaxis(out, 0, axis)
 
 
 def smooth_nan(F, sigma):
@@ -539,27 +575,41 @@ class PostProcessing(JetAnalysis, ImageAnalysis, LagrangianAnalysis, FieldAnalys
 
     def gradient_fields(self):
         """The mean velocity u, the turbulence intensity and the Reynolds shear stress tau = -<u'v'> smoothed over
-        GRADIENT_SIGMA cells (holes ignored), and their transverse gradients d/dy [row, column]: du (1/s; 1/pair in the
+        gradient_sigma cells (holes ignored), and their transverse gradients d/dy [row, column]: du (1/s; 1/pair in the
         sensor space), dti (%/mm; %/px) and dtau (m/s²; px/pair² in the sensor space); and the axial gradient of the
         mean velocity d/dx: dudx (1/s; 1/pair); the mean vorticity smoothed the same way, w (1/s; 1/pair), and its
-        transverse gradient dw (1/(m s); 1/(px pair))."""
+        transverse gradient dw (1/(m s); 1/(px pair)). The gradients: of the smoothed fields (central differences,
+        none next to a hole), or with gradient_smooth_after the differences of the fields (gradient_nan: one-sided
+        next to the holes and the edges) smoothed."""
         s = self.settings
+        sigma, after = s.gradient_sigma, s.gradient_smooth_after
 
         def compute():
             st, f = self.statistics(), self.fields
             mm = 1.0 if f.settings.get("units") == "px" else 1e-3
             x, y = f.x[0].astype(np.float64), f.y[:, 0].astype(np.float64)
-            out = {}
-            for name, F, scale in (("u", st["mean_U"], mm), ("ti", st["ti"], 1.0), ("tau", -st["uv"], mm)):
-                out[name] = smooth_nan(F, GRADIENT_SIGMA)
+
+            def derivative(F, smoothed, coords, axis):
+                if after:
+                    return smooth_nan(gradient_nan(F, coords, axis), sigma)
                 with quiet():
-                    out["d" + name] = np.gradient(out[name], y * scale, axis=0)
-            out["w"] = smooth_nan(self.vorticity_statistics()["mean"], GRADIENT_SIGMA)
-            with quiet():
-                out["dudx"] = np.gradient(out["u"], x * mm, axis=1)
-                out["dw"] = np.gradient(out["w"], y * mm, axis=0)
+                    return np.gradient(smoothed, coords, axis=axis)
+
+            out = {}
+            fields = {"u": st["mean_U"], "ti": st["ti"], "tau": -st["uv"], "w": self.vorticity_statistics()["mean"]}
+            for name, F in fields.items():
+                out[name] = smooth_nan(F, sigma)
+            for name, scale in (("u", mm), ("ti", 1.0), ("tau", mm), ("w", mm)):
+                out["d" + name] = derivative(fields[name], out[name], y * scale, 0)
+            out["dudx"] = derivative(fields["u"], out["u"], x * mm, 1)
             return out
-        return self.windowed("gradient_fields", (s.outlier_k, s.use_u_ref, s.u_ref), compute)
+        return self.windowed("gradient_fields", (s.outlier_k, s.use_u_ref, s.u_ref, sigma, after), compute)
+
+    def smoothed_mean_u(self, sigma):
+        """The mean velocity u smoothed over sigma cells (holes ignored)."""
+        s = self.settings
+        return self.windowed("smoothed_mean_u", (s.outlier_k, sigma),
+                             lambda: smooth_nan(self.statistics()["mean_U"], sigma))
 
     def convergence(self):
         """Residuals between the statistics of U with N and N - 1 maps (N = 2, 3...: PostProcessing_General_PIV.py
@@ -832,7 +882,11 @@ class PostProcessing(JetAnalysis, ImageAnalysis, LagrangianAnalysis, FieldAnalys
 
     def smoothing_text(self):
         """The smoothing of the gradient maps, in their titles."""
-        return f", σ = {num2str(GRADIENT_SIGMA)} cells" if GRADIENT_SIGMA else ""
+        s = self.settings
+        if not s.gradient_sigma:
+            return ""
+        return f", σ = {num2str(s.gradient_sigma)} cells" + (" after the differences" if s.gradient_smooth_after
+                                                              else "")
 
     def draw_velocity_gradient(self, fig, prefix, absolute=False, axis="y"):
         """Map of the gradient of the mean velocity along y (transverse) or x (axial), or of its absolute value."""

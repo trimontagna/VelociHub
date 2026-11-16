@@ -1,7 +1,7 @@
 """Settings of each step as the window Batch and the API handle them ("batch settings"), and their conversion to and
 from the sections of a project file (VelociHub_project.json):
 
-- pre-processing: {"masks", "masks_file", "contrast", "background_removal": {"enabled", "modes_removed"},
+- pre-processing: {"masks", "masks_file", "contrast", "background_removal": {"enabled", "modes_removed", "offset"},
   "export_folder"} (preprocessing_from_project, preprocessing_to_project, validate_preprocessing);
 - PIV/PTV: {"engine", "options", "settings", "engine_settings", "regression", "output_folder"} (piv_from_project,
   piv_to_project, validate_piv);
@@ -23,7 +23,7 @@ from .batch import masks_from_file
 from .fields import VIDEO_FORMAT, VIDEO_FORMATS, VIDEO_FPS, num2str
 from .pipelines import DEFAULT_PIPELINE, pipeline_of_folder, results_sets
 from .postprocessing import FIGURE_TITLES, MAP_FIGURES, PostSettings
-from .preprocessing import EXPORT_FORMATS, ContrastSettings, str2double
+from .preprocessing import EXPORT_FORMATS, ContrastSettings, background_offset_of, str2double
 from .prefs import getpref
 
 
@@ -68,6 +68,7 @@ def validate_preprocessing(section):
     bgrem = section.get("background_removal") or {}
     if bgrem.get("enabled") and not str2double(bgrem.get("modes_removed")) >= 1:
         raise ValueError("POD modes removed: at least 1 with the background removal")
+    background_offset_of(bgrem.get("offset"))
     return section
 
 

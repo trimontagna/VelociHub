@@ -3,8 +3,8 @@
 The images are read in one channel (imread: greyscale.read_grey, the brightness V = max(R, G, B) of a colour image,
 as every step of VelociHub reads them), then processed with a recipe of three optional steps, applied in this order:
     1. masks: polygons whose pixels are set to 0;
-    2. contrast enhancement: intensity capping, local min-max normalization, CLAHE and edge enhancement, in the
-       order chosen, applied before the POD (the modes are those of the enhanced images) or after the background
+    2. contrast enhancement: intensity capping, local min-max normalization, CLAHE, edge enhancement and Gaussian
+       kernel matching (map of the correlation with a Gaussian particle image), in the order chosen, applied before the POD (the modes are those of the enhanced images) or after the background
        removal;
     3. background removal: subtraction of the first POD modes of the training images.
 The images exported are described in the file preprocessing.json of their folder (recipe, source and names), so
@@ -56,9 +56,9 @@ TASK = "PreProcessing"
 # Images selected in a folder when no pattern is given
 IMAGE_EXTENSIONS = (".tif", ".tiff", ".bmp", ".png", ".jpg", ".jpeg", ".gif")
 # Filters of the contrast enhancement, their parameters, and stages where it is applied
-FILTERS = ("capping", "minmax", "clahe", "edge")
+FILTERS = ("capping", "minmax", "clahe", "edge", "gaussian")
 FILTER_PARAMETERS = {"capping": ("cap_n",), "minmax": ("mm_window", "mm_contrast"), "clahe": ("clip", "tiles"),
-                     "edge": ("edge_sigma", "edge_factor")}
+                     "edge": ("edge_sigma", "edge_factor"), "gaussian": ("gm_sigma", "gm_contrast")}
 STAGES = ("pre", "post")
 # Subfolder of the image folder where the images are pre-processed for the PIV, and file describing the images
 # exported in a folder
@@ -122,6 +122,31 @@ def imwrite(A, filename):
     """MATLAB imwrite(A, filename, 'Compression', 'none')."""
     options = {"compression": "raw"} if filename.lower().endswith((".tif", ".tiff")) else {}
     Image.fromarray(A).save(filename, **options)
+
+
+# The offset added to the images after the background removal (grey levels): "auto" or a number. The POD removes the
+# mean image (with the first mode), which holds the light of the particles averaged over the images: the pixels without
+# a particle at that instant end below 0. Cast back to the depth of the raw images, they would be clipped at 0, and the
+# tails of the particles with them (on the benchmark: 83 % of the pixels at 0, particles kept 89 % of their brightness).
+# The offset puts that level back. Automatic: the OFFSET_PERCENTILE-th percentile of the images without offset (out of
+# the masks), below 0, over OFFSET_SAMPLES training images. Before VelociHub 1.2: none (records without it).
+DEFAULT_BACKGROUND_OFFSET = "auto"
+OFFSET_PERCENTILE, OFFSET_SAMPLES = 1.0, 10
+
+
+def background_offset_of(value):
+    """An offset after the background removal: "auto" (also None or empty), or a number of grey levels >= 0.
+    ValueError otherwise."""
+    if value is None or (isinstance(value, str) and value.strip().lower() in ("", "auto")):
+        return "auto"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'Offset after the background removal: "auto" or a number of grey levels, not {value!r}') \
+            from None
+    if not number >= 0:
+        raise ValueError("Offset after the background removal: >= 0 grey levels")
+    return int(number) if number == int(number) else number
 
 
 def cast_like(x, A):
@@ -231,6 +256,41 @@ def edge_enhancement(A, sigma, factor, valid=None):
     else:
         low = cv2.GaussianBlur(a, (0, 0), sigma)
     return cast_like(a + factor * (a - low), A)
+
+
+def gaussian_template(sigma):
+    """Particle image of the Gaussian matching: a Gaussian of standard deviation sigma (px) over a square of side
+    2 ceil(2 sigma) + 1 px (the particle, of diameter about 4 sigma, and a ring of background), minus its mean."""
+    radius = max(1, int(np.ceil(2 * sigma)))
+    u = np.arange(-radius, radius + 1, dtype=np.float64)
+    T = np.exp(-(u[:, None] ** 2 + u[None, :] ** 2) / (2 * sigma**2))
+    return T - T.mean()
+
+
+def gaussian_matching(A, sigma, min_contrast, valid=None):
+    """Gaussian kernel pattern matching: the image becomes the map of its correlation with a Gaussian particle image
+    (gaussian_template) swept over it, the zero-normalized cross-correlation
+        rho = sum (T - mean T)(A - mean A) / (|T - mean T| sqrt(sum (A - mean A)^2))
+    over the template at each pixel: 1 where the image looks exactly like a particle of that size, whatever its
+    brightness; 0 or less elsewhere (set to 0). The local standard deviation of the image is at least min_contrast
+    (grey levels), so that the flat background and its noise don't match as well as a particle. The result fills
+    the range of the class (rho x the largest integer, rho for a float image).
+    The masked pixels are filled with the local level of the valid ones first (fill_masked), so that the edges of
+    the masks don't match."""
+    T = gaussian_template(sigma)
+    k = T.shape[0]
+    a = A.astype(np.float64)
+    if has_mask(valid) and valid.any():
+        a = fill_masked(a, valid, k)
+    # sum T' A = sum T' (A - mean A) since sum T' = 0; local variance over the k x k square of the template
+    covariance = cv2.filter2D(a, cv2.CV_64F, T, borderType=cv2.BORDER_REFLECT)
+    mean = cv2.boxFilter(a, cv2.CV_64F, (k, k), borderType=cv2.BORDER_REFLECT)
+    variance = cv2.boxFilter(a * a, cv2.CV_64F, (k, k), borderType=cv2.BORDER_REFLECT) - mean**2
+    std = np.sqrt(np.maximum(variance, float(min_contrast) ** 2))
+    rho = np.clip(covariance / (np.sqrt((T**2).sum()) * k * std), 0, 1)
+    if has_mask(valid):
+        rho = np.where(valid, rho, 0)
+    return cast_like(rho * (np.iinfo(A.dtype).max if np.issubdtype(A.dtype, np.integer) else 1), A)
 
 
 def ordered_map(function, items, workers=WORKERS):
@@ -403,8 +463,9 @@ def segment_distance(p, a, b):
 class ContrastSettings:
     """Contrast enhancement: the filters, applied in the order given, and their parameters.
 
-    filters: names among "capping" (intensity capping), "minmax" (local min-max normalization), "clahe" and "edge"
-    (edge enhancement: image + factor * (image - Gaussian low-pass of the image)).
+    filters: names among "capping" (intensity capping), "minmax" (local min-max normalization), "clahe", "edge"
+    (edge enhancement: image + factor * (image - Gaussian low-pass of the image)) and "gaussian" (Gaussian kernel
+    matching: the map of the correlation of the image with a Gaussian particle image).
     stage: "pre" (before the POD: the modes are evaluated on the enhanced images) or "post" (after the
     background removal)."""
 
@@ -421,6 +482,9 @@ class ContrastSettings:
     # Edge enhancement: standard deviation (px) of the Gaussian low-pass, and factor of the high-pass added
     edge_sigma: float = 2.0
     edge_factor: float = 1.0
+    # Gaussian kernel matching: standard deviation (px) of the particle image, and minimum local contrast (grey levels)
+    gm_sigma: float = 1.0
+    gm_contrast: float = 2.0
 
     def __post_init__(self):
         self.filters = (self.filters,) if isinstance(self.filters, str) else tuple(self.filters)
@@ -431,11 +495,13 @@ class ContrastSettings:
             raise ValueError(f'Invalid stage "{self.stage}": "pre" (before POD) or "post" (after background removal)')
         self.cap_n, self.mm_contrast, self.clip = float(self.cap_n), float(self.mm_contrast), float(self.clip)
         self.edge_sigma, self.edge_factor = float(self.edge_sigma), float(self.edge_factor)
+        self.gm_sigma, self.gm_contrast = float(self.gm_sigma), float(self.gm_contrast)
         if not (self.cap_n >= 0 and self.mm_window >= 2 and self.mm_contrast > 0 and self.clip > 0
-                and self.tiles >= 1 and self.edge_sigma > 0 and self.edge_factor >= 0):
+                and self.tiles >= 1 and self.edge_sigma > 0 and self.edge_factor >= 0 and self.gm_sigma > 0
+                and self.gm_contrast > 0):
             raise ValueError("Invalid parameters: cap_n must be positive or zero, mm_window at least 2 px, "
                              "mm_contrast and clip positive, tiles at least 1, edge_sigma positive and edge_factor "
-                             "positive or zero")
+                             "positive or zero, gm_sigma and gm_contrast positive")
         self.mm_window, self.tiles = int(self.mm_window), int(self.tiles)
 
     def describe(self):
@@ -445,7 +511,9 @@ class ContrastSettings:
                                      f"min. contrast {num2str(self.mm_contrast)})",
                            "clahe": f"CLAHE (clip {num2str(self.clip)}, {self.tiles}x{self.tiles} tiles)",
                            "edge": f"edge enhancement (σ {num2str(self.edge_sigma)} px, factor "
-                                   f"{num2str(self.edge_factor)})"}[f]
+                                   f"{num2str(self.edge_factor)})",
+                           "gaussian": f"Gaussian matching (σ {num2str(self.gm_sigma)} px, "
+                                       f"min. contrast {num2str(self.gm_contrast)})"}[f]
                           for f in self.filters)
 
 
@@ -651,6 +719,11 @@ class PODBackgroundRemoval:
         self.masks_enabled = True
         self.contrast_enabled = True
         self.contrast = ContrastSettings()
+        # Offset added after the background removal (background_offset_of: "auto" or grey levels), its automatic
+        # values ({key: value}) and the last one applied
+        self.background_offset = DEFAULT_BACKGROUND_OFFSET
+        self.offset_cache = {}
+        self.offset_used = None
         # Intensity cap of the last image enhanced: (cap, fraction of the pixels capped)
         self.last_cap = None
         # Masks, and the pixels they mask
@@ -1136,10 +1209,11 @@ class PODBackgroundRemoval:
 
     def set_contrast(self, filters=None, stage=None, enabled=True, **parameters):
         """Contrast enhancement: filters among "capping" (intensity capping), "minmax" (local min-max
-        normalization), "clahe" and "edge" (edge enhancement), applied in the order given (none: no contrast
-        enhancement), before the POD (stage="pre") or after the background removal (stage="post"). parameters:
-        cap_n (cap at median + cap_n * std), mm_window (px), mm_contrast (grey levels), clip and tiles (CLAHE),
-        edge_sigma (px) and edge_factor (edge enhancement). The filters, the stage and the parameters not given are
+        normalization), "clahe", "edge" (edge enhancement) and "gaussian" (Gaussian kernel matching), applied in the
+        order given (none: no contrast enhancement), before the POD (stage="pre") or after the background removal
+        (stage="post"). parameters: cap_n (cap at median + cap_n * std), mm_window (px), mm_contrast (grey levels),
+        clip and tiles (CLAHE), edge_sigma (px) and edge_factor (edge enhancement), gm_sigma (px) and gm_contrast
+        (grey levels) (Gaussian matching). The filters, the stage and the parameters not given are
         kept. enabled=False: no contrast enhancement, the settings being kept.
         Returns the settings."""
         settings = {**vars(self.contrast), **parameters}
@@ -1176,6 +1250,8 @@ class PODBackgroundRemoval:
                 A = minmax_normalization(A, c.mm_window, c.mm_contrast, valid)
             elif name == "edge":
                 A = edge_enhancement(A, c.edge_sigma, c.edge_factor, valid)
+            elif name == "gaussian":
+                A = gaussian_matching(A, c.gm_sigma, c.gm_contrast, valid)
             else:
                 A = clahe(A, c.clip, c.tiles, valid)
         return A
@@ -1251,26 +1327,66 @@ class PODBackgroundRemoval:
     def load_modes(self, NMod):
         return [load_npz(self.mode_file(mod_i), "PHI_bloc", "TCoeff_bloc") for mod_i in range(1, NMod + 1)]
 
+    def remove_modes(self, A, index, modes):
+        """An image (as read) without the modes (with the temporal coefficients of the training image index), in
+        float32, without offset: below 0 where the image is darker than the background the modes give."""
+        out = A.astype(np.float32).ravel()
+        for data in modes:
+            out -= data["TCoeff_bloc"][index] * data["PHI_bloc"]
+        return out.reshape(A.shape)
+
+    def offset_value(self, modes, dtype):
+        """The offset added after the removal of the modes (grey levels): background_offset, or automatic: the
+        opposite of the OFFSET_PERCENTILE-th percentile of OFFSET_SAMPLES training images without offset, out of
+        the masks (0 if it is above 0), rounded up; at most a quarter of the range of an integer depth. None for the
+        images of floating point (nothing clipped)."""
+        if not np.issubdtype(dtype, np.integer):
+            return None
+        if self.background_offset != "auto":
+            return self.background_offset
+        key = (len(modes), hashlib.sha1(np.ascontiguousarray(modes[0]["TCoeff_bloc"]).tobytes()).hexdigest(),
+               json.dumps(self.recipe_record(len(modes))), str(dtype))
+        if key not in self.offset_cache:
+            samples = np.unique(np.linspace(0, self.NImg - 1, min(OFFSET_SAMPLES, self.NImg)).round().astype(int))
+            values = []
+            for i in samples:
+                A = self.read_image(os.path.join(self.path_in, self.file_in[i]), True)
+                residual = self.remove_modes(A, i, modes)
+                masked = self.masked_pixels(A.shape)
+                values.append(residual[~masked] if masked is not None else residual.ravel())
+            low = float(np.percentile(np.concatenate(values), OFFSET_PERCENTILE))
+            self.offset_cache[key] = int(min(np.ceil(max(0.0, -low)), np.iinfo(dtype).max // 4))
+        return self.offset_cache[key]
+
     def process_image(self, filename, index=0, modes=(), masks=True):
         """The recipe applied to an image: masks, contrast enhancement before POD, removal of the modes (with the
-        temporal coefficients of the training image index) and contrast enhancement after it. masks=False: the
-        masks aren't applied (while they are edited). Returns the image and the background removed (None
-        without background removal)."""
+        temporal coefficients of the training image index) plus the offset (offset_value: the pixels darker than
+        the background of the modes are kept, not clipped at 0), and contrast enhancement after it. masks=False: the
+        masks aren't applied (while they are edited). Returns the image and the background removed (the modes, None
+        without background removal). Without contrast enhancement after it, the masked pixels are at the offset
+        (no edge between them and the background)."""
         A = self.read_image(filename, masks)
-        img, background = A, None
+        img, background, offset = A, None, None
         if modes:
             if A.size != modes[0]["PHI_bloc"].size or not np.issubdtype(A.dtype, np.number):
                 raise ValueError("Target image not compatible.")
-            tmp_im = A.astype(np.float32).ravel()
-            for data in modes:
-                tmp_im -= data["TCoeff_bloc"][index] * data["PHI_bloc"]
-            # Create a variable with the same bitdepth as the original image
-            img = cast_like(tmp_im.reshape(A.shape), A)
-            background = cast_like(A.astype(np.float64) - img, A)
-        if self.contrast_on() and self.contrast.stage == "post":
+            residual = self.remove_modes(A, index, modes)
+            offset = self.offset_value(modes, A.dtype)
+            self.offset_used = offset
+            # Cast back to the depth of the raw image (rounded and saturated)
+            img = cast_like(residual + (offset or 0), A)
+            background = cast_like(A.astype(np.float64) - residual, A)
+        post = self.contrast_on() and self.contrast.stage == "post"
+        if post:
             img = self.enhance_contrast(img, self.valid_pixels(img.shape, masks))
+        if not masks:
+            return img, background
         # The values of the masked pixels after the contrast enhancement are meaningless
-        return (self.apply_masks(img) if masks else img), background
+        img = self.apply_masks(img)
+        masked = self.masked_pixels(img.shape) if offset and not post else None
+        if masked is not None:
+            img[masked] = offset
+        return img, background
 
     def recipe_steps(self, n_modes_removed=0, detailed=False, editing=False):
         """Steps of the recipe switched on, in the order they are applied."""
@@ -1283,7 +1399,10 @@ class PODBackgroundRemoval:
         if self.contrast_on() and self.contrast.stage == "pre":
             steps.append(contrast + (" (before POD)" if detailed else ""))
         if n_modes_removed:
-            steps.append(f"background removal ({n_modes_removed} modes)")
+            offset = self.background_offset
+            steps.append(f"background removal ({n_modes_removed} modes"
+                         + (f", offset {offset}" if not detailed or offset != "auto" or self.offset_used is None
+                            else f", offset auto: {self.offset_used}") + ")")
         if self.contrast_on() and self.contrast.stage == "post":
             steps.append(contrast)
         return steps
@@ -1351,6 +1470,8 @@ class PODBackgroundRemoval:
                 # The folders relative to the one of the project (measurement_folder: relative to this one)
                 json.dump({"date": time.strftime("%Y-%m-%d %H:%M:%S"), "steps": steps,
                            "recipe": self.recipe_record(n_modes_removed),
+                           # The offset added after the background removal (grey levels; automatic: its value)
+                           "background_offset": self.offset_used if n_modes_removed else None,
                            "measurement_folder": relative(self.path_in, self.path_out),
                            "source_folder": relative(folder, self.path_in), "source_files": list(files),
                            "format": fmt, "files": [os.path.basename(p) for p in written]}, f, indent=1,
@@ -1373,7 +1494,8 @@ class PODBackgroundRemoval:
         background_removal = None
         if n_modes_removed:
             background_removal = {"modes_removed": n_modes_removed,
-                                  "training_images": hashlib.sha1("\n".join(self.file_in).encode()).hexdigest()}
+                                  "training_images": hashlib.sha1("\n".join(self.file_in).encode()).hexdigest(),
+                                  "offset": self.background_offset}
         record = {"masks": [m.points.tolist() for m in self.masks if m.enabled] if self.masks_active() else [],
                   "contrast": contrast, "background_removal": background_removal}
         # As read from the file: lists and floats

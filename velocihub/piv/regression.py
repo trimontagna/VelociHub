@@ -1,8 +1,10 @@
-"""Regression of the vector fields of the PIV with SPICY (spicy_vki: constrained radial basis functions, Sperotto,
-Pieraccini & Mendez, von Karman Institute), after the PIV software: each displacement field computed is fitted with
-RBFs on its valid vectors and evaluated on the grid of the PIV, where there is flow (the vectors without particles
-or masked are kept as the PIV gave them). The gaps of the invalid vectors are filled and the noise smoothed;
-vectors.npz keeps the fields of the PIV (raw_u_px, raw_v_px, raw_info) and the residual of each fit.
+"""Regression of the vector fields of the PIV/PTV with SPICY (spicy_vki: constrained radial basis functions,
+Sperotto, Pieraccini & Mendez, von Karman Institute), after the PIV software. SPICY fits scattered data: after a PTV,
+each pair is fitted on the links of its particles themselves (never on the binned cells); after a PIV, on its valid
+vectors (the only data it gives). The fit is evaluated on the grid of the PIV (of the bins of the PTV) where there is
+flow (the vectors without particles or masked are kept as the PIV gave them, the binned cells of a PTV). The gaps are
+filled and the noise smoothed; vectors.npz keeps the fields of the PIV (raw_u_px, raw_v_px, raw_info: the binned
+cells of a PTV) and the residual of each fit, with the number of data fitted.
 
 The regression runs in its own process after the one of the PIV (ChainProcess: spicy_worker.py), by chunks of maps
 saved in the work folder, so that a run stopped continues from the last chunk saved.
@@ -21,6 +23,8 @@ from .base import Parameter, PIVProcess, WorkerProcess
 REGRESSIONS = (("none", "None"), ("spicy", "SPICY"))
 # Maps per chunk saved by the worker
 SPICY_CHUNK = 20
+# Version of the chunks the worker saves: those of another version are discarded (part of the key of a regression)
+SPICY_FORMAT = 3
 SPICY_PARAMETERS = (
     Parameter("basis", "RBF basis", "gauss", "choice",
               "Gaussian RBFs, or C4 RBFs (compact support: faster, a little less smooth).", ("gauss", "c4")),
@@ -43,6 +47,14 @@ SPICY_PARAMETERS = (
               help="Number of sine and cosine functions added to capture global trends (0: none)."),
     Parameter("k_cond", "Condition number", 1e12,
               help="Regularization: the matrix of the fit is regularized to this condition number."),
+    Parameter("outlier_test", "Particle outlier test (0: none)", 3.0,
+              help=("PTV: before the fit, each link is compared with the median of its nearest links (normalized "
+                    "median test of scattered data, 2 passes); it is left out if its difference exceeds this many "
+                    "times the median difference of the neighbours (plus 0.1 px). The PIV vectors are validated by "
+                    "the PIV.")),
+    Parameter("outlier_neighbours", "Neighbours of the outlier test", 10, "int",
+              help="PTV: the nearest links each link is compared with (within 3 grid spacings; with fewer than 4, "
+                   "the link is kept)."),
 )
 
 
@@ -67,6 +79,10 @@ def check_regression(regression):
         raise ValueError("SPICY: divergence penalty and harmonic basis functions >= 0")
     if not s["k_cond"] > 1:
         raise ValueError("SPICY: condition number > 1")
+    if s["outlier_test"] < 0:
+        raise ValueError("SPICY: particle outlier test >= 0 (0: none)")
+    if s["outlier_neighbours"] < 4:
+        raise ValueError("SPICY: neighbours of the outlier test >= 4")
     return {"method": method, "settings": s}
 
 
@@ -100,17 +116,18 @@ def spicy_available():
     return True, "SPICY (spicy_vki)"
 
 
-def start_regression(work, regression, status, width, key):
+def start_regression(work, regression, status, width, key, particles=False):
     """Start the regression of the displacement fields of the PIV (raw.npz of the work folder) in its own process:
     status, the grid points with flow (0); width, of the images in pixels; key, of the PIV and the regression (the
-    chunks of another key are discarded). Returns the WorkerProcess, which writes regressed.npz."""
+    chunks of another key are discarded); particles: the PIV is a PTV, whose links of particles (links.npz of the
+    work folder) are fitted. Returns the WorkerProcess, which writes regressed.npz."""
     ok, reason = spicy_available()
     if not ok:
         raise RuntimeError(reason)
     job = {"work": work, "settings": regression["settings"], "status": status, "width": width,
-           "chunk": SPICY_CHUNK,
-           "key": hashlib.sha1(json.dumps([key, regression_record(regression)], sort_keys=True,
-                                          default=str).encode()).hexdigest()[:16]}
+           "chunk": SPICY_CHUNK, "particles": bool(particles),
+           "key": hashlib.sha1(json.dumps([key, regression_record(regression), bool(particles), SPICY_FORMAT],
+                                          sort_keys=True, default=str).encode()).hexdigest()[:16]}
     return WorkerProcess(sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "spicy_worker.py"),
                          job, work)
 

@@ -58,6 +58,7 @@ The full tutorial is in [docs/installation.md](docs/installation.md).
 | [Post-processing](docs/postprocessing.md) | Camera, scale space, reference quantities, recipe, figure catalogue, exports and videos |
 | [Batch processing](docs/batch-processing.md) | Workspace, window Batch, `velocihub-batch`, batch API |
 | [Archiving (add-on)](docs/archiving.md) | Archives of projects, post-processing and stitching of fields of view, alignment |
+| [Benchmark](docs/benchmark.md) | Analytic flows run through VelociHub and checked against their exact fields: menu Tests, `python -m velocihub.benchmark`, the report, the known issues |
 | [Python API](docs/api.md) | `vh.Project` (a measurement as the interface sees it: settings, save, run), batch and stitching helpers, and the objects of each step: every action of the interface from Python, with the same parameters |
 | [Packaging](docs/packaging.md) | Building and installing VelociHub with pip and conda |
 | [Credits](CREDITS.md) | Authors and licences of all the software VelociHub uses |

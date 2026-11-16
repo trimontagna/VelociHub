@@ -1,15 +1,20 @@
-"""Regression of the displacement fields of the PIV with SPICY, run in its own process by VelociHub (regression.py):
+"""Regression of the displacement fields of the PIV/PTV with SPICY, run in its own process by VelociHub (regression.py):
 
     python spicy_worker.py job.json
 
-The job (JSON file) gives the work folder (with raw.npz, the fields of the PIV), the settings of SPICY, the status of
-the grid points (0: flow), the width of the images and the key of the regression. Each map is fitted on its valid
-vectors in the flow (for a PTV, at the mean position of the particles of each cell: cx, cy of raw.npz) and evaluated
-at all the grid points with flow; the other ones keep the values of the PIV. The
-maps are fitted by chunks saved in the folder spicy of the work folder, so that a regression stopped (file STOP) or
-interrupted continues from the last chunk saved when it is started again with the same key; at the end they are
-gathered in regressed.npz (u, v, info, residual: RMS of the fit on the valid vectors in px, n_rbf, failed). The
-messages are JSON lines on the standard output: progress (phase spicy), log, done, stopped or error.
+The job (JSON file) gives the work folder (with raw.npz, the fields of the PIV/PTV), the settings of SPICY, the status
+of the grid points (0: flow, 1: no particles, 2: masked), the width of the images, the key of the regression and
+whether the data are particles (PTV). SPICY fits scattered data: after a PTV it fits the links of the particles of each
+pair (links.npz of the work folder: each link at the middle of its two positions, with its displacement), never the
+binned cells; the links in masked cells or outside the grid are left out, and the wrong links (link_outliers: the
+normalized median test of scattered data) before the fit. After a PIV it fits the valid vectors of the
+flow at the grid points (the PIV gives nothing else). The fit is evaluated at all the grid points with flow; the other
+ones keep the values of the PIV (the binned cells of a PTV). The maps are fitted by chunks saved in the folder spicy of
+the work folder, so that a regression stopped (file STOP) or interrupted continues from the last chunk saved when it
+is started again with the same key; at the end they are gathered in regressed.npz (u, v, info, residual: RMS of the
+fit on the data fitted in px, n_rbf, n_points: the data fitted, n_rejected: the links left out by the outlier test,
+failed). The messages are JSON lines on the standard
+output: progress (phase spicy), log, done, stopped or error.
 """
 import glob
 import json
@@ -26,24 +31,67 @@ def say(**message):
     print(json.dumps(message), flush=True)
 
 
-# A map needs at least this many valid vectors to be fitted (otherwise it is kept as the PIV gave it)
+# A map needs at least this many data (vectors or particles) to be fitted (otherwise it is kept as the PIV gave it)
 MIN_VECTORS = 20
+# The outlier test of the links: noise level of the displacements (px), the fewest neighbours to test a link, the
+# radius of its neighbourhood (grid spacings), the passes
+OUTLIER_EPS, OUTLIER_MIN_NEIGHBOURS, OUTLIER_RADIUS, OUTLIER_PASSES = 0.1, 4, 3.0, 2
 
 
-def fit(u, v, info, xpx, ypx, flow, width, s, cx=None, cy=None):
-    """One map fitted with SPICY: (u, v, info, residual, number of RBFs), the vectors of the flow replaced by the
-    regression; None if it has too few valid vectors. cx, cy: where the vectors are (PTV: the mean position of the
-    particles of each cell; None: at the grid points)."""
+def link_outliers(x, y, u, v, threshold, neighbours, radius):
+    """The wrong links of a pair (boolean): the normalized median test of scattered data (Westerweel & Scarano 2005,
+    for unstructured data as Duncan et al. 2010). Each link (x, y: its middle; u, v: its displacement) against its
+    nearest links within radius (at most neighbours of them): r0 = |d - median of theirs|, rm = the median of their
+    own |d_j - median|; wrong if r0 / (rm + OUTLIER_EPS) > threshold. The median difference of the neighbours scales
+    the test with the local gradient and noise. Repeated (OUTLIER_PASSES) with the wrong links left out of the
+    neighbourhoods, so that a cluster of them doesn't hide itself; a link with fewer than OUTLIER_MIN_NEIGHBOURS
+    neighbours is kept."""
+    from scipy.spatial import cKDTree
+
+    n = len(x)
+    rejected = np.zeros(n, bool)
+    if n <= OUTLIER_MIN_NEIGHBOURS or threshold <= 0:
+        return rejected
+    pts = np.column_stack([x, y])
+    _, idx = cKDTree(pts).query(pts, k=min(neighbours, n - 1) + 1, distance_upper_bound=radius)
+    idx = idx[:, 1:]  # Itself left out (the nearest)
+    ue, ve = np.append(u, np.nan), np.append(v, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for _ in range(OUTLIER_PASSES):
+            valid = idx < n
+            valid[valid] = ~rejected[idx[valid]]
+            nu = np.where(valid, ue[np.minimum(idx, n)], np.nan)
+            nv = np.where(valid, ve[np.minimum(idx, n)], np.nan)
+            um, vm = np.nanmedian(nu, 1), np.nanmedian(nv, 1)
+            rm = np.nanmedian(np.hypot(nu - um[:, None], nv - vm[:, None]), 1)
+            r0 = np.hypot(u - um, v - vm)
+            rejected = (valid.sum(1) >= OUTLIER_MIN_NEIGHBOURS) & (r0 / (rm + OUTLIER_EPS) > threshold)
+    return rejected
+
+
+def fit(u, v, info, xpx, ypx, flow, width, s, particles=None):
+    """One map fitted with SPICY: (u, v, info, residual, number of RBFs, number of data fitted, number of links
+    left out by the outlier test), the vectors of the flow replaced by the regression evaluated there; None if there
+    are too few data. particles: (x, y, u, v) of the links of the pair (PTV), fitted instead of the grid vectors, the
+    wrong ones left out (link_outliers, setting outlier_test); None: the valid vectors of the flow (PIV)."""
     from spicy_vki.spicy import Spicy
 
-    ok = flow & (info == 1) & np.isfinite(u) & np.isfinite(v)
-    if cx is not None:
-        ok &= np.isfinite(cx) & np.isfinite(cy)
-    if ok.sum() < max(MIN_VECTORS, 3 * max(s["n_k"])):
+    if particles is None:
+        ok = flow & (info == 1) & np.isfinite(u) & np.isfinite(v)
+        px, py, pu, pv = xpx[ok], ypx[ok], u[ok].astype(np.float64), v[ok].astype(np.float64)
+    rejected = 0
+    if particles is not None:
+        px, py, pu, pv = (np.asarray(q, np.float64) for q in particles)
+        if s.get("outlier_test", 0) > 0 and px.size:
+            spacing = float(xpx[0, 1] - xpx[0, 0]) if xpx.shape[1] > 1 else float(ypx[1, 0] - ypx[0, 0])
+            wrong = link_outliers(px, py, pu, pv, s["outlier_test"], int(s.get("outlier_neighbours", 10)),
+                                  OUTLIER_RADIUS * spacing)
+            rejected = int(wrong.sum())
+            px, py, pu, pv = px[~wrong], py[~wrong], pu[~wrong], pv[~wrong]
+    if px.size < max(MIN_VECTORS, 3 * max(s["n_k"])):
         return None
-    px, py = (xpx, ypx) if cx is None else (cx.astype(np.float64), cy.astype(np.float64))
-    sp = Spicy([u[ok].astype(np.float64), v[ok].astype(np.float64)], [px[ok] / width, py[ok] / width],
-               basis=s["basis"], model="laminar", verbose=0)
+    sp = Spicy([pu, pv], [px / width, py / width], basis=s["basis"], model="laminar", verbose=0)
     sp.collocation(list(s["n_k"]), method=s["method"], r_mM=[s["r_min"], s["r_max"]], eps_l=s["eps_l"])
     sp.vector_constraints(extra_RBF=False)
     sp.Assembly_Regression(n_hb=s["n_hb"], alpha_div=s["alpha_div"] or None)
@@ -51,20 +99,43 @@ def fit(u, v, info, xpx, ypx, flow, width, s, cx=None, cy=None):
     us, vs = sp.get_sol([xpx[flow] / width, ypx[flow] / width])
     out_u, out_v, out_info = u.copy(), v.copy(), info.copy()
     out_u[flow], out_v[flow], out_info[flow] = us, vs, 1
-    if cx is None:
-        residual = float(np.sqrt(np.mean((out_u[ok] - u[ok]) ** 2 + (out_v[ok] - v[ok]) ** 2)))
-    else:
-        # At the points fitted
-        fu, fv = sp.get_sol([px[ok] / width, py[ok] / width])
-        residual = float(np.sqrt(np.mean((fu - u[ok]) ** 2 + (fv - v[ok]) ** 2)))
-    return out_u, out_v, out_info, residual, int(sp.n_b)
+    fu, fv = sp.get_sol([px / width, py / width])  # At the data fitted
+    residual = float(np.sqrt(np.mean((fu - pu) ** 2 + (fv - pv) ** 2)))
+    return out_u, out_v, out_info, residual, int(sp.n_b), int(px.size), rejected
+
+
+class Links:
+    """The links of the particles of the pairs (links.npz of the work folder), those fitted: in a cell of the grid
+    (cells of the grid spacing centred on its points) that isn't masked."""
+
+    def __init__(self, work, xpx, ypx, status):
+        path = os.path.join(work, "links.npz")
+        if not os.path.isfile(path):
+            raise RuntimeError("the links of the particles (links.npz) are missing: run the PTV again")
+        with np.load(path) as z:
+            k, x, y, u, v = (z[q] for q in ("k", "x", "y", "u", "v"))
+        x0, y0 = float(xpx[0, 0]), float(ypx[0, 0])
+        spacing = float(xpx[0, 1] - x0) if xpx.shape[1] > 1 else float(ypx[1, 0] - y0)
+        col = np.floor((x - (x0 - spacing / 2)) / spacing).astype(int)
+        row = np.floor((y - (y0 - spacing / 2)) / spacing).astype(int)
+        h, w = status.shape
+        inside = (col >= 0) & (col < w) & (row >= 0) & (row < h)
+        keep = inside & np.isfinite(x) & np.isfinite(y) & np.isfinite(u) & np.isfinite(v)
+        keep[keep] = status[row[keep], col[keep]] != 2
+        self.k, self.x, self.y, self.u, self.v = k[keep], x[keep], y[keep], u[keep], v[keep]
+
+    def of(self, k):
+        """(x, y, u, v) of the links of the pair k fitted."""
+        a, b = np.searchsorted(self.k, [k, k + 1])
+        return self.x[a:b], self.y[a:b], self.u[a:b], self.v[a:b]
 
 
 def main(job_file):
     with open(job_file) as f:
         job = json.load(f)
     work, s, width, chunk, key = job["work"], job["settings"], float(job["width"]), int(job["chunk"]), job["key"]
-    flow = np.asarray(job["status"]) == 0
+    status = np.asarray(job["status"])
+    flow = status == 0
     stop_file = os.path.join(work, "STOP")
     folder = os.path.join(work, "spicy")
     os.makedirs(folder, exist_ok=True)
@@ -75,10 +146,11 @@ def main(job_file):
     with np.load(os.path.join(work, "raw.npz")) as raw:
         xpx, ypx = raw["xpx"].astype(np.float64), raw["ypx"].astype(np.float64)
         U, V, INFO = raw["u"], raw["v"], raw["info"]
-        CX, CY = (raw["cx"], raw["cy"]) if "cx" in raw.files else (None, None)
+    links = Links(work, xpx, ypx, status) if job.get("particles") else None
     n = U.shape[0]
     t0, resumed, resumed_seconds, new = time.time(), 0, 0.0, 0
     warnings.filterwarnings("ignore")
+    names = ("u", "v", "info", "residual", "n_rbf", "n_points", "n_rejected")
     for start in range(0, n, chunk):
         ks = range(start, min(start + chunk, n))
         path = os.path.join(folder, f"{key}_{start:06d}.npz")
@@ -88,18 +160,17 @@ def main(job_file):
                 resumed_seconds += float(z["seconds"])
             say(type="progress", phase="spicy", done=ks.stop, total=n, rate=None, resumed=True)
             continue
-        out = {q: [] for q in ("u", "v", "info", "residual", "n_rbf", "failed")}
+        out = {q: [] for q in names + ("failed",)}
         t_chunk = time.time()
         for k in ks:
             if os.path.exists(stop_file):
                 say(type="stopped")
                 return
-            result = fit(U[k], V[k], INFO[k], xpx, ypx, flow, width, s, *((None, None) if CX is None
-                                                                           else (CX[k], CY[k])))
+            result = fit(U[k], V[k], INFO[k], xpx, ypx, flow, width, s, None if links is None else links.of(k))
             if result is None:
-                result = (U[k], V[k], INFO[k], np.nan, 0)
+                result = (U[k], V[k], INFO[k], np.nan, 0, 0, 0)
                 out["failed"].append(k)
-            for q, value in zip(("u", "v", "info", "residual", "n_rbf"), result):
+            for q, value in zip(names, result):
                 out[q].append(value)
             new += 1
             say(type="progress", phase="spicy", done=k + 1, total=n, rate=(time.time() - t0) / new)
@@ -107,13 +178,14 @@ def main(job_file):
         partial = os.path.join(folder, f"partial_{start:06d}.npz")
         np.savez(partial, u=np.array(out["u"], np.float32), v=np.array(out["v"], np.float32),
                  info=np.array(out["info"]), residual=np.array(out["residual"]), n_rbf=np.array(out["n_rbf"]),
-                 failed=np.array(out["failed"], int), seconds=time.time() - t_chunk)
+                 n_points=np.array(out["n_points"]), n_rejected=np.array(out["n_rejected"]),
+                 failed=np.array(out["failed"], int),
+                 seconds=time.time() - t_chunk)
         os.replace(partial, path)
     # All the chunks gathered
     parts = [np.load(p) for p in sorted(glob.glob(os.path.join(folder, key + "_*.npz")))]
     try:
-        np.savez(os.path.join(work, "regressed.npz"),
-                 **{q: np.concatenate([p[q] for p in parts]) for q in ("u", "v", "info", "residual", "n_rbf")},
+        np.savez(os.path.join(work, "regressed.npz"), **{q: np.concatenate([p[q] for p in parts]) for q in names},
                  failed=np.concatenate([p["failed"] for p in parts]).astype(int))
     finally:
         for p in parts:
