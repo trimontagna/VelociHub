@@ -31,6 +31,7 @@ from tkinter import filedialog, messagebox, ttk
 from ..preprocessing import Stopped, same_path
 from ..project import (PROJECT_FILE, PROJECT_FILES, absolute, clean_name, default_project_name, read_project,
                        relative, summary, write_project)
+from .benchmark_menu import BenchmarkMenu
 from .piv_page import PIVPage
 from .postprocessing_page import PostProcessingPage
 from .preprocessing_page import PreProcessingPage
@@ -46,7 +47,7 @@ PROJECT_FILE_TYPES = [("VelociHub project", PROJECT_FILES), ("JSON", "*.json"), 
 FIRST_MENUS = ("File", "Settings")
 # The menus of the pages not shown (their items never used from the menu bar: their keyboard shortcuts kept)
 HIDDEN_MENUS = ("Pre-processing", "Velocimetry", "Post-processing")
-LAST_MENUS = ("Help",)
+LAST_MENUS = ("Tests", "Help")
 
 
 class MainWindow:
@@ -67,6 +68,8 @@ class MainWindow:
         self.results_folder = None
         # The window of the batch running (batch_dialog.BatchRunWindow), None if none
         self.batch_window = None
+        # The menu Tests: the benchmark on analytic flows (benchmark_menu.py)
+        self.benchmark = BenchmarkMenu(self)
         # Image looked at (0-based), followed by the pages: the image of the pre-processing, the pair of the PIV
         # starting with it and the map of this pair in the post-processing
         self.image_index = 0
@@ -158,6 +161,7 @@ class MainWindow:
                           ("Clear cache", None, self.clear_cache), None,
                           ("Open in explorer", explorer), None, ("Exit", "Ctrl+Q", self.exit_program)]
         hidden = [menus.pop(label) for label in HIDDEN_MENUS if label in menus]
+        menus["Tests"] = self.benchmark.items()
         menus["Help"] = [("Credits", None, self.show_credits)]
         order = list(FIRST_MENUS) + [m for m in menus if m not in FIRST_MENUS + LAST_MENUS] + list(LAST_MENUS)
         menubar = tk.Menu(self.window, tearoff=0)
@@ -606,6 +610,7 @@ class MainWindow:
             if not page.on_exit():
                 return
         self.write_project()
+        self.benchmark.stop()
         # Close all the windows
         self.root.destroy()
 
