@@ -145,9 +145,9 @@ with vh.PODBackgroundRemoval("D:/Jet/Run_30", pattern="*.tif") as session:
 | No filter ticked | `session.set_contrast(enabled=False)` or `set_contrast([])` |
 
 Filter names and parameters: `capping` (`cap_n`), `minmax` (`mm_window`, `mm_contrast`), `clahe` (`clip`, `tiles`),
-`edge` (`edge_sigma`, `edge_factor`); `stage="pre"` or `"post"` — see [preprocessing.md](preprocessing.md). The
+`edge` (`edge_sigma`, `edge_factor`), `gaussian` (`gm_sigma`, `gm_contrast`); `stage="pre"` or `"post"` — see [preprocessing.md](preprocessing.md). The
 filters also exist as functions (`vh.intensity_capping(A, n)`, `vh.minmax_normalization(A, window, min_contrast)`,
-`vh.clahe(A, clip, tiles)`, `vh.edge_enhancement(A, sigma, factor)`).
+`vh.clahe(A, clip, tiles)`, `vh.edge_enhancement(A, sigma, factor)`, `vh.gaussian_matching(A, sigma, min_contrast)`).
 
 ### POD modes
 

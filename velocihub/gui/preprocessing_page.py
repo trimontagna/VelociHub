@@ -111,7 +111,9 @@ class ControlPanel(SidePanel):
                ("minmax", "Local min-max normalization", [("mm_window", "window (px)"),
                                                            ("mm_contrast", "minimum contrast (grey levels)")]),
                ("clahe", "CLAHE", [("clip", "clip limit"), ("tiles", "tiles per side")]),
-               ("edge", "Edge enhancement", [("edge_sigma", "low-pass σ (px)"), ("edge_factor", "factor")])]
+               ("edge", "Edge enhancement", [("edge_sigma", "low-pass σ (px)"), ("edge_factor", "factor")]),
+               ("gaussian", "Gaussian kernel matching", [("gm_sigma", "particle σ (px)"),
+                                                         ("gm_contrast", "minimum contrast (grey levels)")])]
     FILTER_HELP = {
         "capping": "The pixels brighter than median + n std of the image are set to that value, so that a few "
                    "bright particles don't dominate the correlation (Shavit et al. 2007).",
@@ -120,7 +122,14 @@ class ControlPanel(SidePanel):
         "clahe": "Contrast Limited Adaptive Histogram Equalization over tiles of the image (8 or 16 bit images).",
         "edge": "Unsharp masking: image + factor × (image − low-pass), the low-pass being a Gaussian of standard "
                 "deviation σ. Sharpens the particles (σ of about their size, 1 to 3 px) and lowers the slow "
-                "variations of the background. Factor 0: no effect; 1 to 3: usual."}
+                "variations of the background. Factor 0: no effect; 1 to 3: usual.",
+        "gaussian": "The image becomes the map of its correlation with a Gaussian particle image of standard "
+                    "deviation σ swept over it (zero-normalized cross-correlation over a square of 2 ceil(2σ) + 1 px): "
+                    "bright where the image looks like a particle of that size, whatever its brightness, dark "
+                    "elsewhere (negative correlations set to 0). σ of about a quarter of the particle diameter "
+                    "(0.7 to 1.5 px). The minimum contrast is the lowest local standard deviation of the image "
+                    "used, so that the flat background and its noise don't match: about the noise level (1 to 5 "
+                    "grey levels on 8 bit images); higher values also dim the faint particles."}
     EXPORT_HELP = ("Singular exports the images of this project, processed with the recipe, to the subfolder "
                    "PreProcessing of the image folder (or the folder chosen) as "
                    "[project]_PreProcessing_Image_[number], with preprocessing.json (the recipe) and the POD "

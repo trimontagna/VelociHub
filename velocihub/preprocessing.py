@@ -3,8 +3,8 @@
 The images are read in one channel (imread: greyscale.read_grey, the brightness V = max(R, G, B) of a colour image,
 as every step of VelociHub reads them), then processed with a recipe of three optional steps, applied in this order:
     1. masks: polygons whose pixels are set to 0;
-    2. contrast enhancement: intensity capping, local min-max normalization, CLAHE and edge enhancement, in the
-       order chosen, applied before the POD (the modes are those of the enhanced images) or after the background
+    2. contrast enhancement: intensity capping, local min-max normalization, CLAHE, edge enhancement and Gaussian
+       kernel matching (map of the correlation with a Gaussian particle image), in the order chosen, applied before the POD (the modes are those of the enhanced images) or after the background
        removal;
     3. background removal: subtraction of the first POD modes of the training images.
 The images exported are described in the file preprocessing.json of their folder (recipe, source and names), so
@@ -56,9 +56,9 @@ TASK = "PreProcessing"
 # Images selected in a folder when no pattern is given
 IMAGE_EXTENSIONS = (".tif", ".tiff", ".bmp", ".png", ".jpg", ".jpeg", ".gif")
 # Filters of the contrast enhancement, their parameters, and stages where it is applied
-FILTERS = ("capping", "minmax", "clahe", "edge")
+FILTERS = ("capping", "minmax", "clahe", "edge", "gaussian")
 FILTER_PARAMETERS = {"capping": ("cap_n",), "minmax": ("mm_window", "mm_contrast"), "clahe": ("clip", "tiles"),
-                     "edge": ("edge_sigma", "edge_factor")}
+                     "edge": ("edge_sigma", "edge_factor"), "gaussian": ("gm_sigma", "gm_contrast")}
 STAGES = ("pre", "post")
 # Subfolder of the image folder where the images are pre-processed for the PIV, and file describing the images
 # exported in a folder
@@ -233,6 +233,41 @@ def edge_enhancement(A, sigma, factor, valid=None):
     return cast_like(a + factor * (a - low), A)
 
 
+def gaussian_template(sigma):
+    """Particle image of the Gaussian matching: a Gaussian of standard deviation sigma (px) over a square of side
+    2 ceil(2 sigma) + 1 px (the particle, of diameter about 4 sigma, and a ring of background), minus its mean."""
+    radius = max(1, int(np.ceil(2 * sigma)))
+    u = np.arange(-radius, radius + 1, dtype=np.float64)
+    T = np.exp(-(u[:, None] ** 2 + u[None, :] ** 2) / (2 * sigma**2))
+    return T - T.mean()
+
+
+def gaussian_matching(A, sigma, min_contrast, valid=None):
+    """Gaussian kernel pattern matching: the image becomes the map of its correlation with a Gaussian particle image
+    (gaussian_template) swept over it, the zero-normalized cross-correlation
+        rho = sum (T - mean T)(A - mean A) / (|T - mean T| sqrt(sum (A - mean A)^2))
+    over the template at each pixel: 1 where the image looks exactly like a particle of that size, whatever its
+    brightness; 0 or less elsewhere (set to 0). The local standard deviation of the image is at least min_contrast
+    (grey levels), so that the flat background and its noise don't match as well as a particle. The result fills
+    the range of the class (rho x the largest integer, rho for a float image).
+    The masked pixels are filled with the local level of the valid ones first (fill_masked), so that the edges of
+    the masks don't match."""
+    T = gaussian_template(sigma)
+    k = T.shape[0]
+    a = A.astype(np.float64)
+    if has_mask(valid) and valid.any():
+        a = fill_masked(a, valid, k)
+    # sum T' A = sum T' (A - mean A) since sum T' = 0; local variance over the k x k square of the template
+    covariance = cv2.filter2D(a, cv2.CV_64F, T, borderType=cv2.BORDER_REFLECT)
+    mean = cv2.boxFilter(a, cv2.CV_64F, (k, k), borderType=cv2.BORDER_REFLECT)
+    variance = cv2.boxFilter(a * a, cv2.CV_64F, (k, k), borderType=cv2.BORDER_REFLECT) - mean**2
+    std = np.sqrt(np.maximum(variance, float(min_contrast) ** 2))
+    rho = np.clip(covariance / (np.sqrt((T**2).sum()) * k * std), 0, 1)
+    if has_mask(valid):
+        rho = np.where(valid, rho, 0)
+    return cast_like(rho * (np.iinfo(A.dtype).max if np.issubdtype(A.dtype, np.integer) else 1), A)
+
+
 def ordered_map(function, items, workers=WORKERS):
     """function(item) of each item, computed by threads a few items ahead, yielded in the order of the items. The
     items not started are dropped when the loop stops."""
@@ -403,8 +438,9 @@ def segment_distance(p, a, b):
 class ContrastSettings:
     """Contrast enhancement: the filters, applied in the order given, and their parameters.
 
-    filters: names among "capping" (intensity capping), "minmax" (local min-max normalization), "clahe" and "edge"
-    (edge enhancement: image + factor * (image - Gaussian low-pass of the image)).
+    filters: names among "capping" (intensity capping), "minmax" (local min-max normalization), "clahe", "edge"
+    (edge enhancement: image + factor * (image - Gaussian low-pass of the image)) and "gaussian" (Gaussian kernel
+    matching: the map of the correlation of the image with a Gaussian particle image).
     stage: "pre" (before the POD: the modes are evaluated on the enhanced images) or "post" (after the
     background removal)."""
 
@@ -421,6 +457,9 @@ class ContrastSettings:
     # Edge enhancement: standard deviation (px) of the Gaussian low-pass, and factor of the high-pass added
     edge_sigma: float = 2.0
     edge_factor: float = 1.0
+    # Gaussian kernel matching: standard deviation (px) of the particle image, and minimum local contrast (grey levels)
+    gm_sigma: float = 1.0
+    gm_contrast: float = 2.0
 
     def __post_init__(self):
         self.filters = (self.filters,) if isinstance(self.filters, str) else tuple(self.filters)
@@ -431,11 +470,13 @@ class ContrastSettings:
             raise ValueError(f'Invalid stage "{self.stage}": "pre" (before POD) or "post" (after background removal)')
         self.cap_n, self.mm_contrast, self.clip = float(self.cap_n), float(self.mm_contrast), float(self.clip)
         self.edge_sigma, self.edge_factor = float(self.edge_sigma), float(self.edge_factor)
+        self.gm_sigma, self.gm_contrast = float(self.gm_sigma), float(self.gm_contrast)
         if not (self.cap_n >= 0 and self.mm_window >= 2 and self.mm_contrast > 0 and self.clip > 0
-                and self.tiles >= 1 and self.edge_sigma > 0 and self.edge_factor >= 0):
+                and self.tiles >= 1 and self.edge_sigma > 0 and self.edge_factor >= 0 and self.gm_sigma > 0
+                and self.gm_contrast > 0):
             raise ValueError("Invalid parameters: cap_n must be positive or zero, mm_window at least 2 px, "
                              "mm_contrast and clip positive, tiles at least 1, edge_sigma positive and edge_factor "
-                             "positive or zero")
+                             "positive or zero, gm_sigma and gm_contrast positive")
         self.mm_window, self.tiles = int(self.mm_window), int(self.tiles)
 
     def describe(self):
@@ -445,7 +486,9 @@ class ContrastSettings:
                                      f"min. contrast {num2str(self.mm_contrast)})",
                            "clahe": f"CLAHE (clip {num2str(self.clip)}, {self.tiles}x{self.tiles} tiles)",
                            "edge": f"edge enhancement (σ {num2str(self.edge_sigma)} px, factor "
-                                   f"{num2str(self.edge_factor)})"}[f]
+                                   f"{num2str(self.edge_factor)})",
+                           "gaussian": f"Gaussian matching (σ {num2str(self.gm_sigma)} px, "
+                                       f"min. contrast {num2str(self.gm_contrast)})"}[f]
                           for f in self.filters)
 
 
@@ -1136,10 +1179,11 @@ class PODBackgroundRemoval:
 
     def set_contrast(self, filters=None, stage=None, enabled=True, **parameters):
         """Contrast enhancement: filters among "capping" (intensity capping), "minmax" (local min-max
-        normalization), "clahe" and "edge" (edge enhancement), applied in the order given (none: no contrast
-        enhancement), before the POD (stage="pre") or after the background removal (stage="post"). parameters:
-        cap_n (cap at median + cap_n * std), mm_window (px), mm_contrast (grey levels), clip and tiles (CLAHE),
-        edge_sigma (px) and edge_factor (edge enhancement). The filters, the stage and the parameters not given are
+        normalization), "clahe", "edge" (edge enhancement) and "gaussian" (Gaussian kernel matching), applied in the
+        order given (none: no contrast enhancement), before the POD (stage="pre") or after the background removal
+        (stage="post"). parameters: cap_n (cap at median + cap_n * std), mm_window (px), mm_contrast (grey levels),
+        clip and tiles (CLAHE), edge_sigma (px) and edge_factor (edge enhancement), gm_sigma (px) and gm_contrast
+        (grey levels) (Gaussian matching). The filters, the stage and the parameters not given are
         kept. enabled=False: no contrast enhancement, the settings being kept.
         Returns the settings."""
         settings = {**vars(self.contrast), **parameters}
@@ -1176,6 +1220,8 @@ class PODBackgroundRemoval:
                 A = minmax_normalization(A, c.mm_window, c.mm_contrast, valid)
             elif name == "edge":
                 A = edge_enhancement(A, c.edge_sigma, c.edge_factor, valid)
+            elif name == "gaussian":
+                A = gaussian_matching(A, c.gm_sigma, c.gm_contrast, valid)
             else:
                 A = clahe(A, c.clip, c.tiles, valid)
         return A

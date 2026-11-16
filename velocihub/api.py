@@ -122,7 +122,7 @@ class Project:
         masks: a list of polygons [[x, y], ...] or of preprocessing.Mask, or the path of a file of masks (its masks
         copied); masks_file: a file of masks used instead at each run (as the window Batch: "" for none);
         contrast: a ContrastSettings (or its dictionary); filters, stage and the parameters of the filters (cap_n,
-        mm_window, mm_contrast, clip, tiles, edge_sigma, edge_factor): those changed in it; background_removal:
+        mm_window, mm_contrast, clip, tiles, edge_sigma, edge_factor, gm_sigma, gm_contrast): those changed in it; background_removal:
         on/off; modes_removed: the POD modes removed (turns the background removal on, 0 off); export_folder: the
         folder of the images exported, relative to the project (PreProcessing by default); export_format: their
         format, "same" (as the source images, the default), "png", "bmp" or "tiff"."""
