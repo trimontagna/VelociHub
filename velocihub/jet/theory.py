@@ -208,10 +208,15 @@ def region_edges(R, region, level, y):
     return edges
 
 
+# Smoothing of the mean u read by the skewness detection (cells): the smoothing of the gradients before VelociHub 1.2
+JET_SIGMA = 1.5
+
+
 class JetAnalysis:
     """The jet theory of a post-processing (a mixin of postprocessing.PostProcessing, which gives the statistics, the
-    smoothed fields of gradient_fields and the drawing of the maps): the potential core and its figures, when the
-    settings have jet_theory on."""
+    smoothed mean velocity and the drawing of the maps): the potential core and its figures, when the settings have
+    jet_theory on. The skewness detection reads the mean u smoothed over JET_SIGMA cells, whatever the smoothing of
+    the gradients (PostSettings.gradient_sigma)."""
 
     def jet_off(self, key):
         """Why the figure key of the jet theory can't be drawn: the add-on off (None: it can)."""
@@ -258,7 +263,7 @@ class JetAnalysis:
                         skew_columns=None, skew_detect=None, skewness_top=None, end_column=None, fallback=False)
             stations = None
             if s.core_mode == "skewness":
-                S = self.gradient_fields()["u"].T / u_ref
+                S = self.smoothed_mean_u(JET_SIGMA).T / u_ref
                 with quiet():
                     jet = np.flatnonzero(np.nanmax(np.where(np.isfinite(S), S, -np.inf), axis=1) >= JET_START)
                 if jet.size:

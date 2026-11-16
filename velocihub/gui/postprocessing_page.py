@@ -149,6 +149,12 @@ SETTINGS = [
      ("Number of bins per pixel of the histograms of |d_x| and |d_y|, odd so that each integer is in the middle "
       "of a bin. The quality 1 - C compares the histogram with its moving average over 1 px: too few bins miss "
       "the peaks at the integers, too many make the bins noisy. 21 in PostProcessing_General_PIV.py.")),
+    ("Gradients", "gradient_sigma", "Smoothing σ (cells; 0: none)",
+     ("The mean fields are smoothed over this many grid cells (a Gaussian, the masked and empty cells ignored) for "
+      "the maps of their gradients (Mean velocity gradient, Turbulence intensity gradient, Reynolds shear stress "
+      "gradient, Mean vorticity gradient). More smoothing: less noise, but the gradients of the small structures and "
+      "the peaks of the shear layers are lost: at 1.5 cells a structure of 10 cells keeps 38 % of its gradient, at "
+      "0.5 cell 90 %. 0.5 by default (1.5 before VelociHub 1.2).")),
     ("Jet theory (add-on)", "core_level", "Core: mean u ≥ (% of u_ref)",
      ("Velocity level detection: the potential core is where the mean u is at least this percentage of the u_ref "
       "of the jet theory (below). Its boundary is that isocontour, closed by the edge of the field where the core "
@@ -182,7 +188,15 @@ JET_THEORY_HELP = ("The jet theory is an add-on, for a jet coming from the left 
                    "numbers in metrics.json. Off: those figures aren't drawn nor exported. The rest of the "
                    "post-processing makes no assumption on the flow.")
 # The boxes inside the box Miscellaneous, before the POD
-MISC_SECTIONS = ("Peak locking",)
+MISC_SECTIONS = ("Peak locking", "Gradients")
+# The toggle of the order of the smoothing and the differences of the gradients (below their smoothing)
+SMOOTH_AFTER_LABEL = "Smooth after differencing (walls)"
+SMOOTH_AFTER_HELP = ("The differences are taken first, one-sided next to the masks and the edges of the field, then "
+                     "smoothed; off, the smoothed fields are differenced. Away from the masks and the edges both give "
+                     "the same gradients. Next to a wall, the smoothing of the field only averages one side of it "
+                     "and flattens the gradient, and the grid points next to the wall get none: on a laminar "
+                     "boundary layer the gradient at the wall is underestimated by half. On, the gradient there is "
+                     "kept and those points get one.")
 # Sections in the box Add-ons, below the box Miscellaneous
 ADDON_SECTIONS = ("Jet theory (add-on)",)
 # The mode of the POD of the images shown (box POD of the box Miscellaneous)
@@ -308,7 +322,9 @@ BATCH_LABELS = {"use_u_ref": "Velocities over u_ref", "u_ref": "Ref. velocity u_
                 "rolling_maps": "Rolling interval (maps)", "core_u_ref": "Jet theory u_ref (m/s; empty: max of mean u)",
                 "jet_theory": "Jet theory add-on (potential core)",
                 "pod_mode": "POD modes exported (first to last)",
-                "pod_combine": "POD modes summed (the background of each image)"}
+                "pod_combine": "POD modes summed (the background of each image)",
+                "gradient_sigma": "Gradients: smoothing σ (cells; 0: none)",
+                "gradient_smooth_after": "Gradients: smooth after differencing (walls)"}
 
 
 def batch_maps_folders(project, settings):
@@ -330,7 +346,7 @@ def post_fields(settings):
     helps = {key: text for _, key, _, text in SETTINGS}
     helps.update({key: text for _, key, _, text in REFERENCE_SETTINGS})
     helps.update(use_u_ref=helps.get("u_ref"), use_t_flow=helps.get("t_flow"), l_ref=L_REF_HELP, nu=NU_HELP,
-                 rolling=ROLLING_HELP, pod_mode=POD_MODE_HELP)
+                 rolling=ROLLING_HELP, pod_mode=POD_MODE_HELP, gradient_smooth_after=SMOOTH_AFTER_HELP)
     camera = {key: help_ for key, _, _, help_ in CAMERA_SETTINGS}
     fields = [Field(("results",), "Results sets exported", "multi", tuple((label, label) for label in pipelines()),
                     default=list(pipelines()), help=RESULTS_HELP),
@@ -488,6 +504,13 @@ class PostPanel(SidePanel):
                 self.core_entries[key] = entry
             if key in JET_KEYS:
                 self.jet_entries[key] = entry
+            if key == "gradient_sigma":
+                # The order of the smoothing and the differences, below it
+                row = self.row(grids[section].master, pady=(4, 0))
+                self.gradient_smooth_after = tk.BooleanVar(self, settings.gradient_smooth_after)
+                ttk.Checkbutton(row, text=SMOOTH_AFTER_LABEL, variable=self.gradient_smooth_after,
+                                command=page.apply_settings).pack(side=tk.LEFT)
+                HelpDot(row, SMOOTH_AFTER_HELP).pack(side=tk.LEFT, padx=(4, 0))
         self.update_core_u_ref()
         self.update_core_mode()
         if not hasattr(self, "pod_slider"):
@@ -818,7 +841,8 @@ class PostPanel(SidePanel):
         if values["t_flow"] is not None:
             values["t_flow"] /= 1000
         return PostSettings(rolling=self.rolling.get(), jet_theory=self.jet_theory.get(),
-                            core_mode=self.core_mode.get(), pod_combine=self.pod_combine.get(), **values)
+                            core_mode=self.core_mode.get(), pod_combine=self.pod_combine.get(),
+                            gradient_smooth_after=self.gradient_smooth_after.get(), **values)
 
     def show(self, settings):
         for key, var in self.vars.items():
@@ -827,6 +851,7 @@ class PostPanel(SidePanel):
         self.rolling_scale.set(settings.rolling_maps)
         self.pod_slider.set(settings.pod_mode, settings.pod_mode_last or settings.pod_mode)
         self.pod_combine.set(settings.pod_combine)
+        self.gradient_smooth_after.set(settings.gradient_smooth_after)
         self.jet_theory.set(settings.jet_theory)
         self.core_mode.set(settings.core_mode)
         self.update_core_mode()
@@ -850,7 +875,8 @@ PANEL_LABELS = {**{label: [("settings", key)] for _, key, label, _ in SETTINGS},
                 "Interval (maps)": [("settings", "rolling_maps")], "Detection": [("settings", "core_mode")],
                 "Jet theory add-on": [("settings", "jet_theory")],
                 "Scale space": [("space",)], "POD modes": [("settings", "pod_mode"), ("settings", "pod_mode_last")],
-                "Export": [("settings", "pod_combine")]}
+                "Export": [("settings", "pod_combine")],
+                SMOOTH_AFTER_LABEL: [("settings", "gradient_smooth_after")]}
 class BatchPage:
     """What the side panel tells the page, in the window Batch: its changes, to the form (BatchPostForm.commit)."""
 
