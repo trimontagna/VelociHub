@@ -123,10 +123,15 @@ max(R, G, B) of a colour image).
 | Divergence penalty (0: none) | `alpha_div` | 0 | Penalty on the 2D divergence. Keep 0 for an axisymmetric jet in a plane through its axis (there du/dx + dv/dy = −v/r). |
 | Harmonic basis functions | `n_hb` | 0 | Sines and cosines added for global trends. |
 | Condition number | `k_cond` | 1e12 | Regularization of the fit matrix. |
+| Particle outlier test (0: none) | `outlier_test` | 3 | PTV: before the fit, each link is compared with the median of its nearest links (the normalized median test of scattered data, Westerweel & Scarano 2005, Duncan et al. 2010; 2 passes): left out if `|d − median| / (median difference of the neighbours + 0.1 px)` exceeds this. The PIV vectors are validated by the PIV. |
+| Neighbours of the outlier test | `outlier_neighbours` | 10 | PTV: the nearest links each link is compared with, within 3 grid spacings (with fewer than 4, the link is kept). |
 
 `vectors.npz` then holds the regressed fields, plus the raw ones (`raw_u_px`, `raw_v_px`, `raw_info`: the binned
 cells of a PTV, set by its grid spacing, min. particles per cell and median test), the residual of each fit (RMS at the
-data fitted, px) and the number of data fitted (`regression_n_points`). The quality figures keep using the raw PIV/PTV
+data fitted, px), the number of data fitted (`regression_n_points`) and of links left out by the outlier test
+(`regression_n_rejected`). On the benchmark (`docs/benchmark.md`), with 2 % of the links wrong, the test catches 93 to
+100 % of them and brings the error of SPICY back within 1.1 times that without wrong links (4 to 5 times without the
+test), and leaves out under 0.6 % of the good links. The quality figures keep using the raw PIV/PTV
 validity, and the grid points out of the flow (valid in less than 10 % of the pairs) are not evaluated.
 
 ### Particles in the windows (diagnostic only)

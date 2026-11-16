@@ -6,12 +6,14 @@ The job (JSON file) gives the work folder (with raw.npz, the fields of the PIV/P
 of the grid points (0: flow, 1: no particles, 2: masked), the width of the images, the key of the regression and
 whether the data are particles (PTV). SPICY fits scattered data: after a PTV it fits the links of the particles of each
 pair (links.npz of the work folder: each link at the middle of its two positions, with its displacement), never the
-binned cells; the links in masked cells or outside the grid are left out. After a PIV it fits the valid vectors of the
+binned cells; the links in masked cells or outside the grid are left out, and the wrong links (link_outliers: the
+normalized median test of scattered data) before the fit. After a PIV it fits the valid vectors of the
 flow at the grid points (the PIV gives nothing else). The fit is evaluated at all the grid points with flow; the other
 ones keep the values of the PIV (the binned cells of a PTV). The maps are fitted by chunks saved in the folder spicy of
 the work folder, so that a regression stopped (file STOP) or interrupted continues from the last chunk saved when it
 is started again with the same key; at the end they are gathered in regressed.npz (u, v, info, residual: RMS of the
-fit on the data fitted in px, n_rbf, n_points: the data fitted, failed). The messages are JSON lines on the standard
+fit on the data fitted in px, n_rbf, n_points: the data fitted, n_rejected: the links left out by the outlier test,
+failed). The messages are JSON lines on the standard
 output: progress (phase spicy), log, done, stopped or error.
 """
 import glob
@@ -31,19 +33,62 @@ def say(**message):
 
 # A map needs at least this many data (vectors or particles) to be fitted (otherwise it is kept as the PIV gave it)
 MIN_VECTORS = 20
+# The outlier test of the links: noise level of the displacements (px), the fewest neighbours to test a link, the
+# radius of its neighbourhood (grid spacings), the passes
+OUTLIER_EPS, OUTLIER_MIN_NEIGHBOURS, OUTLIER_RADIUS, OUTLIER_PASSES = 0.1, 4, 3.0, 2
+
+
+def link_outliers(x, y, u, v, threshold, neighbours, radius):
+    """The wrong links of a pair (boolean): the normalized median test of scattered data (Westerweel & Scarano 2005,
+    for unstructured data as Duncan et al. 2010). Each link (x, y: its middle; u, v: its displacement) against its
+    nearest links within radius (at most neighbours of them): r0 = |d - median of theirs|, rm = the median of their
+    own |d_j - median|; wrong if r0 / (rm + OUTLIER_EPS) > threshold. The median difference of the neighbours scales
+    the test with the local gradient and noise. Repeated (OUTLIER_PASSES) with the wrong links left out of the
+    neighbourhoods, so that a cluster of them doesn't hide itself; a link with fewer than OUTLIER_MIN_NEIGHBOURS
+    neighbours is kept."""
+    from scipy.spatial import cKDTree
+
+    n = len(x)
+    rejected = np.zeros(n, bool)
+    if n <= OUTLIER_MIN_NEIGHBOURS or threshold <= 0:
+        return rejected
+    pts = np.column_stack([x, y])
+    _, idx = cKDTree(pts).query(pts, k=min(neighbours, n - 1) + 1, distance_upper_bound=radius)
+    idx = idx[:, 1:]  # Itself left out (the nearest)
+    ue, ve = np.append(u, np.nan), np.append(v, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for _ in range(OUTLIER_PASSES):
+            valid = idx < n
+            valid[valid] = ~rejected[idx[valid]]
+            nu = np.where(valid, ue[np.minimum(idx, n)], np.nan)
+            nv = np.where(valid, ve[np.minimum(idx, n)], np.nan)
+            um, vm = np.nanmedian(nu, 1), np.nanmedian(nv, 1)
+            rm = np.nanmedian(np.hypot(nu - um[:, None], nv - vm[:, None]), 1)
+            r0 = np.hypot(u - um, v - vm)
+            rejected = (valid.sum(1) >= OUTLIER_MIN_NEIGHBOURS) & (r0 / (rm + OUTLIER_EPS) > threshold)
+    return rejected
 
 
 def fit(u, v, info, xpx, ypx, flow, width, s, particles=None):
-    """One map fitted with SPICY: (u, v, info, residual, number of RBFs, number of data fitted), the vectors of the
-    flow replaced by the regression evaluated there; None if there are too few data. particles: (x, y, u, v) of the
-    links of the pair (PTV), fitted instead of the grid vectors; None: the valid vectors of the flow (PIV)."""
+    """One map fitted with SPICY: (u, v, info, residual, number of RBFs, number of data fitted, number of links
+    left out by the outlier test), the vectors of the flow replaced by the regression evaluated there; None if there
+    are too few data. particles: (x, y, u, v) of the links of the pair (PTV), fitted instead of the grid vectors, the
+    wrong ones left out (link_outliers, setting outlier_test); None: the valid vectors of the flow (PIV)."""
     from spicy_vki.spicy import Spicy
 
     if particles is None:
         ok = flow & (info == 1) & np.isfinite(u) & np.isfinite(v)
         px, py, pu, pv = xpx[ok], ypx[ok], u[ok].astype(np.float64), v[ok].astype(np.float64)
-    else:
+    rejected = 0
+    if particles is not None:
         px, py, pu, pv = (np.asarray(q, np.float64) for q in particles)
+        if s.get("outlier_test", 0) > 0 and px.size:
+            spacing = float(xpx[0, 1] - xpx[0, 0]) if xpx.shape[1] > 1 else float(ypx[1, 0] - ypx[0, 0])
+            wrong = link_outliers(px, py, pu, pv, s["outlier_test"], int(s.get("outlier_neighbours", 10)),
+                                  OUTLIER_RADIUS * spacing)
+            rejected = int(wrong.sum())
+            px, py, pu, pv = px[~wrong], py[~wrong], pu[~wrong], pv[~wrong]
     if px.size < max(MIN_VECTORS, 3 * max(s["n_k"])):
         return None
     sp = Spicy([pu, pv], [px / width, py / width], basis=s["basis"], model="laminar", verbose=0)
@@ -56,7 +101,7 @@ def fit(u, v, info, xpx, ypx, flow, width, s, particles=None):
     out_u[flow], out_v[flow], out_info[flow] = us, vs, 1
     fu, fv = sp.get_sol([px / width, py / width])  # At the data fitted
     residual = float(np.sqrt(np.mean((fu - pu) ** 2 + (fv - pv) ** 2)))
-    return out_u, out_v, out_info, residual, int(sp.n_b), int(px.size)
+    return out_u, out_v, out_info, residual, int(sp.n_b), int(px.size), rejected
 
 
 class Links:
@@ -105,7 +150,7 @@ def main(job_file):
     n = U.shape[0]
     t0, resumed, resumed_seconds, new = time.time(), 0, 0.0, 0
     warnings.filterwarnings("ignore")
-    names = ("u", "v", "info", "residual", "n_rbf", "n_points")
+    names = ("u", "v", "info", "residual", "n_rbf", "n_points", "n_rejected")
     for start in range(0, n, chunk):
         ks = range(start, min(start + chunk, n))
         path = os.path.join(folder, f"{key}_{start:06d}.npz")
@@ -123,7 +168,7 @@ def main(job_file):
                 return
             result = fit(U[k], V[k], INFO[k], xpx, ypx, flow, width, s, None if links is None else links.of(k))
             if result is None:
-                result = (U[k], V[k], INFO[k], np.nan, 0, 0)
+                result = (U[k], V[k], INFO[k], np.nan, 0, 0, 0)
                 out["failed"].append(k)
             for q, value in zip(names, result):
                 out[q].append(value)
@@ -133,7 +178,8 @@ def main(job_file):
         partial = os.path.join(folder, f"partial_{start:06d}.npz")
         np.savez(partial, u=np.array(out["u"], np.float32), v=np.array(out["v"], np.float32),
                  info=np.array(out["info"]), residual=np.array(out["residual"]), n_rbf=np.array(out["n_rbf"]),
-                 n_points=np.array(out["n_points"]), failed=np.array(out["failed"], int),
+                 n_points=np.array(out["n_points"]), n_rejected=np.array(out["n_rejected"]),
+                 failed=np.array(out["failed"], int),
                  seconds=time.time() - t_chunk)
         os.replace(partial, path)
     # All the chunks gathered

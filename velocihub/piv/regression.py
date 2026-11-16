@@ -24,7 +24,7 @@ REGRESSIONS = (("none", "None"), ("spicy", "SPICY"))
 # Maps per chunk saved by the worker
 SPICY_CHUNK = 20
 # Version of the chunks the worker saves: those of another version are discarded (part of the key of a regression)
-SPICY_FORMAT = 2
+SPICY_FORMAT = 3
 SPICY_PARAMETERS = (
     Parameter("basis", "RBF basis", "gauss", "choice",
               "Gaussian RBFs, or C4 RBFs (compact support: faster, a little less smooth).", ("gauss", "c4")),
@@ -47,6 +47,14 @@ SPICY_PARAMETERS = (
               help="Number of sine and cosine functions added to capture global trends (0: none)."),
     Parameter("k_cond", "Condition number", 1e12,
               help="Regularization: the matrix of the fit is regularized to this condition number."),
+    Parameter("outlier_test", "Particle outlier test (0: none)", 3.0,
+              help=("PTV: before the fit, each link is compared with the median of its nearest links (normalized "
+                    "median test of scattered data, 2 passes); it is left out if its difference exceeds this many "
+                    "times the median difference of the neighbours (plus 0.1 px). The PIV vectors are validated by "
+                    "the PIV.")),
+    Parameter("outlier_neighbours", "Neighbours of the outlier test", 10, "int",
+              help="PTV: the nearest links each link is compared with (within 3 grid spacings; with fewer than 4, "
+                   "the link is kept)."),
 )
 
 
@@ -71,6 +79,10 @@ def check_regression(regression):
         raise ValueError("SPICY: divergence penalty and harmonic basis functions >= 0")
     if not s["k_cond"] > 1:
         raise ValueError("SPICY: condition number > 1")
+    if s["outlier_test"] < 0:
+        raise ValueError("SPICY: particle outlier test >= 0 (0: none)")
+    if s["outlier_neighbours"] < 4:
+        raise ValueError("SPICY: neighbours of the outlier test >= 4")
     return {"method": method, "settings": s}
 
 

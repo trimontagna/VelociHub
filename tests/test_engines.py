@@ -55,8 +55,8 @@ def test_tractrac(copy):
 
 def test_tractrac_spicy_fits_the_particles(copy):
     """TracTrac then SPICY: each pair is fitted on the links of its particles (without masks: exactly those binned in
-    the cells of the grid, more than the cells), evaluated on the grid; the binned cells are kept as the raw fields.
-    The jet is still measured."""
+    the cells of the grid, more than the cells, less those the outlier test leaves out: a few), evaluated on the grid;
+    the binned cells are kept as the raw fields. The jet is still measured."""
     pytest.importorskip("imutils")
     pytest.importorskip("spicy_vki")
     folder = copy("images")
@@ -70,12 +70,13 @@ def test_tractrac_spicy_fits_the_particles(copy):
     with np.load(path) as z:
         settings = json.loads(str(z["settings"]))
         n_points, residual = z["regression_n_points"], z["regression_residual_px"]
+        rejected = z["regression_n_rejected"]
         binned = z["ptv_particles"].reshape(len(n_points), -1).sum(1)
         cells = z["x_px"].size
         assert "raw_u_px" in z.files and "raw_info" in z.files
     assert settings["regression_data"] == "particles"
-    assert np.array_equal(n_points, binned) and np.all(n_points > cells)
-    # RMS at the particles (px): the jet, and the few links TracTrac gets wrong (no outlier test on the particles)
+    assert np.array_equal(n_points + rejected, binned) and np.all(n_points > cells) and rejected.sum() < 0.15 * binned.sum()
+    # RMS at the particles (px): the jet, and the links TracTrac gets wrong that the outlier test keeps
     assert np.all(np.isfinite(residual)) and np.median(residual) < 1
     post = vh.PostProcessing(vh.load_vectors(path, pixels=True), vh.PostSettings())
     check_jet(post)
