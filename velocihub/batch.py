@@ -37,6 +37,7 @@ from .fields import EXPORT_DPI, load_vectors
 from .postprocessing import PostProcessing, PostSettings, default_export_folder
 from .piv.particles import DEFAULT_DIAMETER, DEFAULT_SNR
 from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, POD_FILE, PREPROCESSING_FOLDER, ContrastSettings, Mask,
+                            background_offset_of,
                             PODBackgroundRemoval, list_files, list_images, num2str, read_manifest, str2double)
 from .project import (PROJECT_FILE, clean_name, comparable_recipe, format_duration, piv_results, read_project,
                       relative, run_time, valid_text, write_project)
@@ -174,6 +175,7 @@ def settings_signature(data):
     # No regression, whether saved as none or not saved (projects before the regression)
     regression = piv_settings.get("regression") or {}
     return json.dumps([pre.get("masks") or [], pre.get("contrast"), bgrem.get("enabled"), bgrem.get("modes_removed"),
+                       bgrem.get("offset", "auto"),
                        piv_settings.get("engine"), piv_settings.get("engine_settings"),
                        regression if regression.get("method", "none") != "none" else None], sort_keys=True)
 
@@ -216,7 +218,8 @@ def save_project(session, n_modes, engine, settings, fields, pod_file, history, 
         "masks": [{"name": m.name, "enabled": m.enabled, "points": m.points.tolist()} for m in session.masks],
         "contrast": contrast,
         "background_removal": {"enabled": bool(n_modes), "modes_removed": str(n_modes),
-                               "modes_to_evaluate": str(max(n_modes, session.NMod_saved))},
+                               "modes_to_evaluate": str(max(n_modes, session.NMod_saved)),
+                               "offset": session.background_offset},
         "automatic_threshold": pre.get("automatic_threshold") or {"eps_sigma": num2str(session.eps_auto_sigma),
                                                                   "eps_psi": num2str(session.eps_auto_psi)},
         "export_folder": rel(session.export_folder()),
@@ -364,6 +367,7 @@ def apply_preprocessing(session, section):
     session.path_export = os.path.normpath(os.path.join(session.path_in, folder if inside else PREPROCESSING_FOLDER))
     session.export_format = section.get("export_format") or DEFAULT_EXPORT_FORMAT
     bgrem = section.get("background_removal") or {}
+    session.background_offset = background_offset_of(bgrem.get("offset"))
     n_modes = str2double(bgrem.get("modes_removed")) if bgrem.get("enabled") else 0
     return int(min(n_modes, session.NImg)) if n_modes >= 1 else 0
 

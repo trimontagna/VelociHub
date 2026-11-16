@@ -85,6 +85,7 @@ The interface starts with **intensity capping, n = 10, after the background remo
 |---|---|---|---|
 | Remove the background (Ctrl+P) | `n_modes_removed > 0` | on | Subtracts the first modes from each image. |
 | Modes removed | `n_modes_removed` | 6 | The first mode is close to the mean image; a few more modes remove the slowly varying background. Too many modes start to remove particles. |
+| Offset (grey levels) | `session.background_offset` (`background_removal.offset` in the settings) | `"auto"` | Added after the removal. The first mode is about the mean image, which also holds the light of the particles averaged over the images; a pixel without a particle at that instant ends below 0, and the images, kept at the bit depth of the raw ones, would be clipped there, cutting the tails of the particles. `auto`: just enough for 99 % of the pixels (the 1st percentile of 10 training images without offset, out of the masks); or a number (0: clipped at 0, as before VelociHub 1.2). Without contrast enhancement after the removal, the masked pixels are at the offset too, so the masks make no edge. On the benchmark (8-bit images, 1 mode): offset 22, particles keep 98 % of their brightness instead of 89 %, the reflections left fall from 3.7 % to 0.2 %. |
 
 ### Export (Run step)
 

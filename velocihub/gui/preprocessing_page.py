@@ -22,8 +22,8 @@ from matplotlib.backend_bases import MouseButton
 from matplotlib.patches import Polygon as MplPolygon
 
 from ..batch import masks_from_file
-from ..preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, FILTERS, MODE_LABEL, PREPROCESSING_FOLDER,
-                             ContrastSettings, Mask, PODBackgroundRemoval, available_memory, closed, describe_images,
+from ..preprocessing import (DEFAULT_BACKGROUND_OFFSET, DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, FILTERS,
+                             MODE_LABEL, PREPROCESSING_FOLDER, background_offset_of, ContrastSettings, Mask, PODBackgroundRemoval, available_memory, closed, describe_images,
                              draw_spectrum, imread, list_files, load_npz, mode_limits, mode_title, mround, num2str,
                              polygon_centroid, read_manifest, same_path, segment_distance, str2double)
 from ..project import comparable_recipe, relative
@@ -52,8 +52,8 @@ def describe_preprocessing(section):
     source = f" (of {os.path.basename(section['masks_file'])})" if section.get("masks_file") else ""
     return "; ".join([f"{len(masks)} mask(s) enabled{source}" if masks else f"no mask{source}",
                       f"contrast: {contrast.describe()}" if contrast.filters else "no contrast enhancement",
-                      f"{bgrem.get('modes_removed')} POD modes removed" if bgrem.get("enabled")
-                      else "no background removal",
+                      f"{bgrem.get('modes_removed')} POD modes removed (offset {bgrem.get('offset', 'auto')})"
+                      if bgrem.get("enabled") else "no background removal",
                       f"exported to {section.get('export_folder') or 'PreProcessing'}"])
 
 
@@ -68,6 +68,8 @@ def preprocessing_fields(section):
         fields.append(Field(("masks",), "Masks enabled", "masks"))
     fields += [Field(("background_removal", "enabled"), "Background removal", "bool", default=False),
                Field(("background_removal", "modes_removed"), "POD modes removed", "int", default=DEFAULT_MODES),
+               Field(("background_removal", "offset"), "Offset after the removal (grey levels; auto)", "text",
+                     help=OFFSET_HELP, default=DEFAULT_BACKGROUND_OFFSET),
                Field(("contrast", "filters"), "Contrast enhancement: filters, in this order", "multi",
                      tuple((name, label) for name, label, _ in ControlPanel.FILTER_WIDGETS)),
                Field(("contrast", "stage"), "Contrast enhancement applied", "choice",
@@ -88,6 +90,13 @@ def preprocessing_fields(section):
 
 # Formats of the images exported (preprocessing.EXPORT_FORMATS), as the interface names them
 EXPORT_FORMAT_LABELS = {"same": "Same as the source", "png": "PNG", "bmp": "BMP", "tiff": "TIFF"}
+OFFSET_HELP = ("Added to the images after the removal of the modes. The first mode is about the mean image, which holds "
+               "the light of the particles averaged over the images: a pixel without a particle at that instant ends "
+               "below 0, and the images, kept at the bit depth of the raw ones, would be clipped there, the tails of "
+               "the particles with them (they look smaller and dimmer). The offset keeps them. auto: just enough for "
+               "99 % of the pixels (from 10 training images); or a number of grey levels (0: clipped at 0, as before "
+               "VelociHub 1.2). Without contrast enhancement after the removal, the masked pixels are at the offset "
+               "too, so that the masks make no edge in the images.")
 EXPORT_FORMAT_HELP = ("Format of the images exported. Same as the source: the format of each source image (a JPEG is "
                       "compressed again, with losses). PNG (8 or 16 bit), BMP (8 bit only) and TIFF (any depth, "
                       "uncompressed) are lossless. The images are in one channel (grey levels): a colour image is "
@@ -291,6 +300,16 @@ class ControlPanel(SidePanel):
         self.modes_spinbox.bind("<FocusOut>", lambda event: page.set_modes_removed())
         self.modes_label = ttk.Label(row)
         self.modes_label.pack(side=tk.LEFT)
+        row = self.row(box)
+        ttk.Label(row, text="Offset (grey levels)").pack(side=tk.LEFT)
+        self.background_offset = tk.StringVar(self, str(DEFAULT_BACKGROUND_OFFSET))
+        self.offset_entry = ttk.Entry(row, textvariable=self.background_offset, width=6)
+        self.offset_entry.pack(side=tk.LEFT, padx=6)
+        self.offset_entry.bind("<Return>", lambda event: page.set_background_offset())
+        self.offset_entry.bind("<FocusOut>", lambda event: page.set_background_offset())
+        HelpDot(row, OFFSET_HELP).pack(side=tk.LEFT)
+        self.offset_label = ttk.Label(row, foreground="#555555")
+        self.offset_label.pack(side=tk.LEFT, padx=(6, 0))
 
         self.show_contrast_settings(page.contrast)
 
@@ -303,7 +322,7 @@ class ControlPanel(SidePanel):
         page = self.page
         self.update_images()
         for widget in (self.spectrum_button, self.auto_button, self.modes_button, self.bgrem_toggle,
-                       self.modes_spinbox):
+                       self.modes_spinbox, self.offset_entry):
             widget.configure(state=tk.NORMAL if page.Check_imsel else tk.DISABLED)
         # The background removal can be in the recipe before the modes are evaluated: they are evaluated by the
         # export or the PIV
@@ -434,6 +453,9 @@ class PrePage(PanelPage):
     def set_modes_removed(self):
         self.commit()
 
+    def set_background_offset(self):
+        self.commit()
+
     def toggle_mask(self, i):
         if not self.form.masks_file:
             self.masks[i].enabled = not self.masks[i].enabled
@@ -451,7 +473,8 @@ class BatchPreForm(PanelForm):
     CHOICES = {label: (("contrast", "filters"), name) for name, label, _ in ControlPanel.FILTER_WIDGETS}
     LABELS = {**{text: [("contrast", param)] for _, _, params in ControlPanel.FILTER_WIDGETS for param, text in params},
               "Applied": [("contrast", "stage")], "Remove the background   (Ctrl+P)": [("background_removal", "enabled")],
-              "Modes removed": [("background_removal", "modes_removed")]}
+              "Modes removed": [("background_removal", "modes_removed")],
+              "Offset (grey levels)": [("background_removal", "offset")]}
 
     def make_panel(self):
         self.masks_file = None
@@ -480,6 +503,7 @@ class BatchPreForm(PanelForm):
         panel.bgrem_toggle.configure(variable=page.use_bgrem)
         panel.modes_spinbox.configure(to=10000)
         panel.modes_removed.set(str(bgrem.get("modes_removed", DEFAULT_MODES)))
+        panel.background_offset.set(str(bgrem.get("offset", DEFAULT_BACKGROUND_OFFSET)))
 
     def restore_states(self, unavailable):
         # The masks of a file: shown, not changed here
@@ -495,10 +519,12 @@ class BatchPreForm(PanelForm):
             modes = int(float(panel.modes_removed.get()))
         except ValueError:
             raise ValueError("POD modes removed: an integer") from None
+        offset = background_offset_of(panel.background_offset.get())
         out = {"contrast": {"filters": list(contrast.filters), "stage": contrast.stage,
                             **{p: getattr(contrast, p) for _, _, params in ControlPanel.FILTER_WIDGETS
                                for p, _ in params}},
-               "background_removal": {"enabled": bool(page.use_bgrem.get()), "modes_removed": modes}}
+               "background_removal": {"enabled": bool(page.use_bgrem.get()), "modes_removed": modes,
+                                      "offset": offset}}
         if not self.masks_file:
             out["masks"] = [{"name": m.name, "enabled": m.enabled, "points": m.points} for m in page.masks]
         return out
@@ -513,6 +539,11 @@ class BatchPreForm(PanelForm):
             try:
                 return int(float(value))
             except (TypeError, ValueError):
+                return value
+        if field.path == ("background_removal", "offset"):
+            try:
+                return background_offset_of(value)
+            except ValueError:
                 return value
         return value
 
@@ -1049,7 +1080,8 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
                 "contrast": contrast,
                 "background_removal": {"enabled": bool(self.use_bgrem.get()),
                                        "modes_removed": panel.modes_removed.get(),
-                                       "modes_to_evaluate": panel.n_modes.get()},
+                                       "modes_to_evaluate": panel.n_modes.get(),
+                                       "offset": self.background_offset},
                 "automatic_threshold": {"eps_sigma": panel.eps_sigma.get(), "eps_psi": panel.eps_psi.get()},
                 "export_folder": rel(self.export_folder()),
                 "export_format": self.export_format,
@@ -1078,6 +1110,12 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
         for var, key in ((panel.modes_removed, "modes_removed"), (panel.n_modes, "modes_to_evaluate")):
             if bgrem.get(key) is not None:
                 var.set(str(bgrem[key]))
+        try:
+            self.background_offset = background_offset_of(bgrem.get("offset"))
+        except ValueError as e:
+            self.update_status(f"Project: offset of the background removal not restored ({e})")
+            self.background_offset = DEFAULT_BACKGROUND_OFFSET
+        panel.background_offset.set(str(self.background_offset))
         eps = data.get("automatic_threshold") or {}
         for var, key in ((panel.eps_sigma, "eps_sigma"), (panel.eps_psi, "eps_psi")):
             if eps.get(key) is not None and not np.isnan(str2double(eps[key])):
@@ -1450,6 +1488,8 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
         self.last_cap = None
         img, _ = self.process_image(os.path.join(self.path_in, name), self.showing_im_i - 1,
                                     self.load_modes(removed), masks=not editing)
+        self.panel.offset_label["text"] = (f"auto: {self.offset_used}" if removed and self.background_offset == "auto"
+                                           and self.offset_used is not None else "")
         clim = self.im_caxis.val if self.im_caxis.active else (0, np.max(img)) if removed else None
 
         # Title: the image, then the steps of the recipe applied to it
@@ -1495,6 +1535,19 @@ class PreProcessingPage(Page, PODBackgroundRemoval):
             return 0
         NMod = str2double(self.panel.modes_removed.get())
         return int(min(NMod, self.NImg)) if NMod >= 1 else 0
+
+    def set_background_offset(self):
+        """The offset after the background removal entered in the side panel: "auto" (or empty) or grey levels."""
+        try:
+            offset = background_offset_of(self.panel.background_offset.get())
+        except ValueError as e:
+            self.update_status(str(e))
+            offset = self.background_offset
+        self.panel.background_offset.set(str(offset))
+        if offset != self.background_offset:
+            self.background_offset = offset
+            self.show_main()
+            self.app.save_project()
 
     def set_modes_removed(self):
         """Number of modes removed changed in the side panel."""

@@ -124,6 +124,31 @@ def imwrite(A, filename):
     Image.fromarray(A).save(filename, **options)
 
 
+# The offset added to the images after the background removal (grey levels): "auto" or a number. The POD removes the
+# mean image (with the first mode), which holds the light of the particles averaged over the images: the pixels without
+# a particle at that instant end below 0. Cast back to the depth of the raw images, they would be clipped at 0, and the
+# tails of the particles with them (on the benchmark: 83 % of the pixels at 0, particles kept 89 % of their brightness).
+# The offset puts that level back. Automatic: the OFFSET_PERCENTILE-th percentile of the images without offset (out of
+# the masks), below 0, over OFFSET_SAMPLES training images. Before VelociHub 1.2: none (records without it).
+DEFAULT_BACKGROUND_OFFSET = "auto"
+OFFSET_PERCENTILE, OFFSET_SAMPLES = 1.0, 10
+
+
+def background_offset_of(value):
+    """An offset after the background removal: "auto" (also None or empty), or a number of grey levels >= 0.
+    ValueError otherwise."""
+    if value is None or (isinstance(value, str) and value.strip().lower() in ("", "auto")):
+        return "auto"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'Offset after the background removal: "auto" or a number of grey levels, not {value!r}') \
+            from None
+    if not number >= 0:
+        raise ValueError("Offset after the background removal: >= 0 grey levels")
+    return int(number) if number == int(number) else number
+
+
 def cast_like(x, A):
     """MATLAB bf = zeros(size(A), 'like', A); bf(:) = x(:);
     Integers are rounded half away from zero and saturated, as MATLAB does."""
@@ -694,6 +719,11 @@ class PODBackgroundRemoval:
         self.masks_enabled = True
         self.contrast_enabled = True
         self.contrast = ContrastSettings()
+        # Offset added after the background removal (background_offset_of: "auto" or grey levels), its automatic
+        # values ({key: value}) and the last one applied
+        self.background_offset = DEFAULT_BACKGROUND_OFFSET
+        self.offset_cache = {}
+        self.offset_used = None
         # Intensity cap of the last image enhanced: (cap, fraction of the pixels capped)
         self.last_cap = None
         # Masks, and the pixels they mask
@@ -1297,26 +1327,66 @@ class PODBackgroundRemoval:
     def load_modes(self, NMod):
         return [load_npz(self.mode_file(mod_i), "PHI_bloc", "TCoeff_bloc") for mod_i in range(1, NMod + 1)]
 
+    def remove_modes(self, A, index, modes):
+        """An image (as read) without the modes (with the temporal coefficients of the training image index), in
+        float32, without offset: below 0 where the image is darker than the background the modes give."""
+        out = A.astype(np.float32).ravel()
+        for data in modes:
+            out -= data["TCoeff_bloc"][index] * data["PHI_bloc"]
+        return out.reshape(A.shape)
+
+    def offset_value(self, modes, dtype):
+        """The offset added after the removal of the modes (grey levels): background_offset, or automatic: the
+        opposite of the OFFSET_PERCENTILE-th percentile of OFFSET_SAMPLES training images without offset, out of
+        the masks (0 if it is above 0), rounded up; at most a quarter of the range of an integer depth. None for the
+        images of floating point (nothing clipped)."""
+        if not np.issubdtype(dtype, np.integer):
+            return None
+        if self.background_offset != "auto":
+            return self.background_offset
+        key = (len(modes), hashlib.sha1(np.ascontiguousarray(modes[0]["TCoeff_bloc"]).tobytes()).hexdigest(),
+               json.dumps(self.recipe_record(len(modes))), str(dtype))
+        if key not in self.offset_cache:
+            samples = np.unique(np.linspace(0, self.NImg - 1, min(OFFSET_SAMPLES, self.NImg)).round().astype(int))
+            values = []
+            for i in samples:
+                A = self.read_image(os.path.join(self.path_in, self.file_in[i]), True)
+                residual = self.remove_modes(A, i, modes)
+                masked = self.masked_pixels(A.shape)
+                values.append(residual[~masked] if masked is not None else residual.ravel())
+            low = float(np.percentile(np.concatenate(values), OFFSET_PERCENTILE))
+            self.offset_cache[key] = int(min(np.ceil(max(0.0, -low)), np.iinfo(dtype).max // 4))
+        return self.offset_cache[key]
+
     def process_image(self, filename, index=0, modes=(), masks=True):
         """The recipe applied to an image: masks, contrast enhancement before POD, removal of the modes (with the
-        temporal coefficients of the training image index) and contrast enhancement after it. masks=False: the
-        masks aren't applied (while they are edited). Returns the image and the background removed (None
-        without background removal)."""
+        temporal coefficients of the training image index) plus the offset (offset_value: the pixels darker than
+        the background of the modes are kept, not clipped at 0), and contrast enhancement after it. masks=False: the
+        masks aren't applied (while they are edited). Returns the image and the background removed (the modes, None
+        without background removal). Without contrast enhancement after it, the masked pixels are at the offset
+        (no edge between them and the background)."""
         A = self.read_image(filename, masks)
-        img, background = A, None
+        img, background, offset = A, None, None
         if modes:
             if A.size != modes[0]["PHI_bloc"].size or not np.issubdtype(A.dtype, np.number):
                 raise ValueError("Target image not compatible.")
-            tmp_im = A.astype(np.float32).ravel()
-            for data in modes:
-                tmp_im -= data["TCoeff_bloc"][index] * data["PHI_bloc"]
-            # Create a variable with the same bitdepth as the original image
-            img = cast_like(tmp_im.reshape(A.shape), A)
-            background = cast_like(A.astype(np.float64) - img, A)
-        if self.contrast_on() and self.contrast.stage == "post":
+            residual = self.remove_modes(A, index, modes)
+            offset = self.offset_value(modes, A.dtype)
+            self.offset_used = offset
+            # Cast back to the depth of the raw image (rounded and saturated)
+            img = cast_like(residual + (offset or 0), A)
+            background = cast_like(A.astype(np.float64) - residual, A)
+        post = self.contrast_on() and self.contrast.stage == "post"
+        if post:
             img = self.enhance_contrast(img, self.valid_pixels(img.shape, masks))
+        if not masks:
+            return img, background
         # The values of the masked pixels after the contrast enhancement are meaningless
-        return (self.apply_masks(img) if masks else img), background
+        img = self.apply_masks(img)
+        masked = self.masked_pixels(img.shape) if offset and not post else None
+        if masked is not None:
+            img[masked] = offset
+        return img, background
 
     def recipe_steps(self, n_modes_removed=0, detailed=False, editing=False):
         """Steps of the recipe switched on, in the order they are applied."""
@@ -1329,7 +1399,10 @@ class PODBackgroundRemoval:
         if self.contrast_on() and self.contrast.stage == "pre":
             steps.append(contrast + (" (before POD)" if detailed else ""))
         if n_modes_removed:
-            steps.append(f"background removal ({n_modes_removed} modes)")
+            offset = self.background_offset
+            steps.append(f"background removal ({n_modes_removed} modes"
+                         + (f", offset {offset}" if not detailed or offset != "auto" or self.offset_used is None
+                            else f", offset auto: {self.offset_used}") + ")")
         if self.contrast_on() and self.contrast.stage == "post":
             steps.append(contrast)
         return steps
@@ -1397,6 +1470,8 @@ class PODBackgroundRemoval:
                 # The folders relative to the one of the project (measurement_folder: relative to this one)
                 json.dump({"date": time.strftime("%Y-%m-%d %H:%M:%S"), "steps": steps,
                            "recipe": self.recipe_record(n_modes_removed),
+                           # The offset added after the background removal (grey levels; automatic: its value)
+                           "background_offset": self.offset_used if n_modes_removed else None,
                            "measurement_folder": relative(self.path_in, self.path_out),
                            "source_folder": relative(folder, self.path_in), "source_files": list(files),
                            "format": fmt, "files": [os.path.basename(p) for p in written]}, f, indent=1,
@@ -1419,7 +1494,8 @@ class PODBackgroundRemoval:
         background_removal = None
         if n_modes_removed:
             background_removal = {"modes_removed": n_modes_removed,
-                                  "training_images": hashlib.sha1("\n".join(self.file_in).encode()).hexdigest()}
+                                  "training_images": hashlib.sha1("\n".join(self.file_in).encode()).hexdigest(),
+                                  "offset": self.background_offset}
         record = {"masks": [m.points.tolist() for m in self.masks if m.enabled] if self.masks_active() else [],
                   "contrast": contrast, "background_removal": background_removal}
         # As read from the file: lists and floats

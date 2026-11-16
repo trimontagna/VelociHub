@@ -32,7 +32,7 @@ from .fields import load_vectors
 from .pipelines import DEFAULT_PIPELINE, chosen_results, results_folders, selected_results
 from .postprocessing import PostProcessing, PostSettings
 from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, PREPROCESSING_FOLDER, ContrastSettings,
-                            PODBackgroundRemoval, export_format_of)
+                            DEFAULT_BACKGROUND_OFFSET, PODBackgroundRemoval, background_offset_of, export_format_of)
 from .project import PROJECT_FILE, read_project, write_project
 from .settings import (camera_of, camera_record, export_spec, piv_from_project, piv_to_project, post_from_project, post_to_project,
                        preprocessing_from_project, preprocessing_to_project, settings_from_record, settings_record,
@@ -48,7 +48,8 @@ def default_preprocessing():
     contrast = asdict(DEFAULT_CONTRAST)
     contrast["filters"] = list(DEFAULT_CONTRAST.filters)
     return {"masks": [], "contrast": contrast,
-            "background_removal": {"enabled": True, "modes_removed": str(DEFAULT_MODES)},
+            "background_removal": {"enabled": True, "modes_removed": str(DEFAULT_MODES),
+                                   "offset": DEFAULT_BACKGROUND_OFFSET},
             "export_folder": PREPROCESSING_FOLDER, "export_format": DEFAULT_EXPORT_FORMAT}
 
 
@@ -115,15 +116,16 @@ class Project:
         return self
 
     def set_preprocessing(self, masks=None, masks_file=None, contrast=None, filters=None, stage=None,
-                          background_removal=None, modes_removed=None, export_folder=None, export_format=None,
-                          **parameters):
+                          background_removal=None, modes_removed=None, background_offset=None, export_folder=None,
+                          export_format=None, **parameters):
         """Change the pre-processing (the side panel of the page Pre-processing; None: unchanged).
 
         masks: a list of polygons [[x, y], ...] or of preprocessing.Mask, or the path of a file of masks (its masks
         copied); masks_file: a file of masks used instead at each run (as the window Batch: "" for none);
         contrast: a ContrastSettings (or its dictionary); filters, stage and the parameters of the filters (cap_n,
         mm_window, mm_contrast, clip, tiles, edge_sigma, edge_factor, gm_sigma, gm_contrast): those changed in it; background_removal:
-        on/off; modes_removed: the POD modes removed (turns the background removal on, 0 off); export_folder: the
+        on/off; modes_removed: the POD modes removed (turns the background removal on, 0 off); background_offset:
+        the offset added after the removal, "auto" or grey levels (preprocessing.DEFAULT_BACKGROUND_OFFSET); export_folder: the
         folder of the images exported, relative to the project (PreProcessing by default); export_format: their
         format, "same" (as the source images, the default), "png", "bmp" or "tiff"."""
         s = self.preprocessing
@@ -149,6 +151,8 @@ class Project:
             bgrem.update(enabled=int(modes_removed) > 0, modes_removed=str(int(modes_removed) or DEFAULT_MODES))
         if background_removal is not None:
             bgrem["enabled"] = bool(background_removal)
+        if background_offset is not None:
+            bgrem["offset"] = background_offset_of(background_offset)
         s["background_removal"] = bgrem
         if export_folder is not None:
             s["export_folder"] = export_folder

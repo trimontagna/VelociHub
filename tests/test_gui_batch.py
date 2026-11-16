@@ -195,8 +195,11 @@ def test_preprocessing(campaign):
     panel.contrast_changed()
     panel.modes_removed.set("5")
     panel.page.set_modes_removed()
+    panel.background_offset.set("12")
+    panel.page.set_background_offset()
     assert settings_of(b)["contrast"]["cap_n"] == 7.0
     assert int(settings_of(b)["background_removal"]["modes_removed"]) == 5
+    assert settings_of(b)["background_removal"]["offset"] == 12
     assert differs(d, campaign.node("b"))
     select(d, campaign.folder)
     filters = ("contrast", "filters")
