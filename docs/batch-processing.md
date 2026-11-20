@@ -10,6 +10,11 @@ the **window Batch** of the interface, the command **`velocihub-batch`**, and th
 The panel on the left of the window is the **workspace**: root folders scanned for projects, saved in a workspace
 file (`VelociHub_workspace.json` in the first root added, or wherever you save it; the last one reopens at start).
 
+<img src="images/workspace.png" width="260" alt="The panel Projects">
+
+*The panel Projects: a root folder, its project (with images: Img) and the results of its two pipelines (PaIRS and
+TracTrac), the one shown in the post-processing in bold.*
+
 - A **project** is a folder with a project file, with images (two or more: pre-processing and PIV), or with the
   results of a velocimetry pipeline (`PIV/vectors.npz` of PaIRS, `PTV/vectors.npz` of TracTrac, or `vectors.npz` in
   the folder). The column **Velocimetry** lists the pipelines whose results each project has (`PaIRS, TracTrac`); a
@@ -39,6 +44,11 @@ that step:
 - Settings changed are saved into the project files (the section of the step), so a project opened later shows them.
 - **Run** starts a separate process (the window stays usable) with a log, a progress bar and previews of the files
   written. **Stop** ends the step running (the PIV keeps the pairs computed) and skips the remaining projects.
+
+![The window Batch](images/batch.png)
+
+*The window Batch of the post-processing: the project ticked, the settings of the node selected (the box named after
+it) and the quantities exported.*
 
 What each step's form contains:
 

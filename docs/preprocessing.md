@@ -16,6 +16,13 @@ and Fluid Science 80 (2017) 181-192. VelociHub's pre-processing is a Python port
 
 Module: `velocihub/preprocessing.py` (class `PODBackgroundRemoval`), page: `velocihub/gui/preprocessing_page.py`.
 
+![The page Pre-processing](images/preprocessing.png)
+
+*The page Pre-processing on the synthetic turbulence of the [benchmark](benchmark.md) (201 images of 512 x 320 px).
+Top: image 60, raw left of the wiper and with the recipe right of it (background removal of 1 mode, then intensity
+capping), and the first POD mode, the background removed. Bottom: the spectrum (energy of each mode), the temporal
+mean of the modes and the temporal coefficient of mode 1, the image shown marked. Right: the side panel (below).*
+
 ## Features
 
 - **Training images**: every image of a folder (or those matching a pattern), at least two, any size and bit depth
@@ -37,6 +44,11 @@ Module: `velocihub/preprocessing.py` (class `PODBackgroundRemoval`), page: `velo
   background reconstructed with the temporal coefficients of the training image of the same index.
 
 ## Parameters
+
+<img src="images/preprocessing_panel.png" width="300" alt="Side panel of the page Pre-processing">
+
+*The side panel: images, masks, contrast enhancement (scrolled further: the POD modes and the background removal) and
+the run step (export folder, format, Batch... and Singular).*
 
 ### Images
 

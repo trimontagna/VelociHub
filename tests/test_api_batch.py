@@ -28,6 +28,22 @@ def test_settings_saved_and_read(copy):
     assert [q.folder for q in vh.projects(os.path.dirname(folder))] == [folder]
 
 
+def test_engine_changes_its_results_folder(copy):
+    """Another engine takes its own default results folder (as in the page Velocimetry), after a run has recorded
+    the folder of the previous one; a folder chosen is kept."""
+    p = vh.Project(copy("piv"))
+    p.set_piv(engine="TracTrac")
+    assert p.piv["output_folder"] in (None, "PTV")
+    p.piv["output_folder"] = "PTV"  # As recorded by a run
+    p.set_piv(engine="PaIRS-UniNa")
+    assert p.piv["output_folder"] == "PIV"
+    p.set_piv(output_folder="Mine")
+    p.set_piv(engine="TracTrac")
+    assert p.piv["output_folder"] == "Mine"
+    p.set_piv(engine="PaIRS-UniNa", output_folder="Other")
+    assert p.piv["output_folder"] == "Other"
+
+
 def test_postprocessing_exported_and_overwritten(copy):
     """The quantities chosen exported; again: the previous export kept beside it, or replaced (overwrite)."""
     folder = copy("piv")
