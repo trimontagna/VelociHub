@@ -7,6 +7,7 @@ against that field. Run it after a change to catch regressions, and to see how a
   - `flows.py`: the flows;
   - `cases.py`: the cases, their checks and the levels;
   - `post_level.py`, `regression_level.py`: the runs and the metrics;
+  - `image_level.py`: the levels on particle images (pre-processing → processing, and the full chain);
   - `uncertainty.py`: the uncertainty of the PTV predicted from the flow;
   - `images.py`: the particle images, the test workspace and the background-removal test;
   - `measurement.py`: folders written as VelociHub's own;
@@ -23,18 +24,28 @@ caused it.
 | **Pre-processing** | Particle images of the cylinder flow with stationary reflections of known shape (the cylinder's rim, a streak, a wall line, a ring, a glare spot), then VelociHub's POD background removal (mask loaded) with 0–3 modes removed | What remains of each reflection, by a matched filter of its exact shape (% and grey levels) and by a Hough transform for lines and circles; the particles as a whole and one by one; the background left and the pixels clipped at 0 |
 | **Post-processing** | The exact fields, without and with noise, written as PIV results (`Exact/vectors.npz`, through `PIVRun.vectors`), read by `load_vectors` with the camera and post-processed by `PostProcessing` with its default recipe. No PIV/PTV step | 1. The samples themselves: mean, standard deviation and covariance, computed by numpy from the same displacements; this verifies the arithmetic, units and orientation to the rounding. 2. The analytic values: the exact mean, the noise statistics, the analytic vorticity and gradient, and the turbulence statistics of the modes |
 | **Processing → post** | Particle links and PIV vectors sampled from the exact field (no images), binned and regressed by VelociHub, saved by `PIVRun.save` (`vectors.npz`), read back and post-processed | The exact field; the post-processed mean against the fields read back (the chain, to the rounding); the error of the binning against its uncertainty predicted from the flow |
-| *Images (next)* | The test images run through pre-processing → PIV/PTV → post | The exact fields of the test measurements |
+| **Pre-processing → processing** | Particle images of each case, pre-processed with several recipes (none, the POD background removal, the default of the interface, then each contrast filter), processed by the PIV (PaIRS-UniNa) and the PTV (TracTrac) through the API, as a user runs them. The same flows rendered harder compare all the recipes | The exact field: the error of the PIV and its outliers, valid vectors and peak ratio; the particles the PTV links, its wrong links, the error of the right ones and the lengths of its tracks |
+| **Full chain** | The test images with the background removal (1 POD mode), the PIV and the PTV with and without SPICY, then the post-processing with its default recipe | The exact statistics: the mean, the vorticity of the mean, the fluctuations; for the turbulence, its variances, integral scales and dissipation |
 
-The background removal is a test of its own and does not run through the whole chain. When the image level is built,
-the background-removal measurement will be its single ON/OFF case through the full chain.
+The background removal has a test of its own (the pre-processing level). Its measurement, the cylinder with
+reflections, is also its single case through the whole chain, with the background removal on and off.
 
 ## Running it
 
 | Where | How |
 |---|---|
-| Interface | **Tests > Benchmark**: everything, one level for all the cases, or one case (post and processing levels). It runs in its own process while the interface stays usable; the progress shows in the status log and the report opens in the browser. Other entries: **Open the last report**, **Open the reports folder** (`~/VelociHub/benchmarks`). |
-| Command line | `python -m velocihub.benchmark [cases ...] [--levels preprocessing post processing] [--scenarios ...] [--out folder] [--compare previous] [--spicy key=value ...] [--no-open] [--json]`. Exit code 1 when a check fails. |
-| Tests | `pytest tests/test_benchmark.py` (one test per check), and `--benchmark-report folder` to also write the report. |
+| Interface | **Tests > Benchmark**: everything, one level for all the cases, or one case (post and processing levels). It runs in its own process while the interface stays usable. A window follows it: a bar per level (the runs of the PIV/PTV counted on the image levels), the current step, the time since the start, the log of the messages, **Stop** (the run and the PIV/PTV it started ended) and **Open the report** at the end. **Close** hides it while the run goes on; **Tests > Show the progress** shows it again. The report also opens in the browser at the end. Other entries: **Open the last report**, **Open the reports folder**. |
+| Command line | `python -m velocihub.benchmark [cases ...] [--levels preprocessing post processing images chain] [--scenarios ...] [--out folder] [--compare previous] [--spicy key=value ...] [--no-open] [--json]`. Exit code 1 when a check fails. |
+| Tests | `pytest tests/test_benchmark.py` (one test per check; the report written too). The checks of the levels on images are skipped unless `--benchmark-images` (they run the PIV/PTV for about 20 minutes). `--benchmark-report folder` writes the report elsewhere. |
+
+**The reports** go to `benchmark_reports` in the folder of the repository, one folder per run named by its date and
+time (`report_20261120_183015`), so that the runs can be gone through and compared. Git leaves the folder out
+(`.gitignore`). When VelociHub is installed without its repository, they go to `~/VelociHub/benchmarks`. `--out`
+writes one elsewhere.
+
+**How long:** about a minute without the levels on images; about 20 minutes with them (12 cores; the turbulence and
+its SPICY fits on 200 maps take the longest). The images are rendered once and kept in
+`~/VelociHub/benchmarks/images` (about 100 MB), then reused while their parameters stay the same.
 | Python | `from velocihub.benchmark import run_benchmark, report`; `result = run_benchmark(["jet"], levels=("post",))`; `report.write_report(result, "folder")`. |
 
 Each report can be compared with a previous one: in the interface, the last report; on the command line, `--compare`.
@@ -163,6 +174,93 @@ Not modelled yet:
     derivative, and a position error of about a Δt²/8;
   - the peak locking.
 
+## The levels on images
+
+**The images.** Each case's test images (`images.render`: 41 frames for the steady flows, 201 for the turbulence) are
+linked into a measurement folder of the work folder, with the mask of the body, and run through `vh.Project` as a user
+would: `set_preprocessing` with the recipe, `set_piv` with the engine, then the PIV/PTV (the pre-processing first, as
+Run step > Singular does). Each run keeps its own folders (`PreProcessing_<recipe>`, `PIV_<recipe>`, `PTV_<recipe>`,
+`..._spicy`). The PIV uses windows of 64 then 32 px with 50 % overlap (the 16 px grid of the cases); the PTV, TracTrac
+with its defaults. The exact displacement of a pair is the flow at the middle of the pair.
+
+**The recipes** (`image_level.RECIPES`; the filters applied after the background removal, with their defaults):
+
+| Recipe | What it does |
+|---|---|
+| None | No pre-processing (the mask of the body only) |
+| POD, 1 mode | The background removal: the first POD mode, about the mean image, removed |
+| Default (POD 6 modes + capping) | The default of the interface |
+| POD 1 + capping, + min-max, + CLAHE, + edges, + Gaussian matching | 1 mode removed, then one contrast filter |
+
+The test images run the first three, the hard images all eight.
+
+**The hard images** (`images.HARD`) render the cylinder, the jet and the turbulence (61 frames) as a difficult
+recording: dim particles of varied brightness (peak 20 to 90 grey levels) and size (1.5 to 3.5 px across), camera
+noise of 6 grey levels, a background of 30, a light sheet dimmer by 60 % at the top and bottom edges, ±10 % laser
+energy, and the stationary reflections of the background removal test. The test images stay as they were.
+
+**The measures.**
+- PIV: the RMS error of the displacement (all the flow and away from the edges and masks), the outliers (more than
+  0.5 px off), the valid vectors and the median correlation peak ratio.
+- PTV: the particles linked in each pair (median), the wrong links (more than 1 px off), the RMS error of the right
+  links, the median length of the tracks, the particles tracked of those detected, and the field binned on the grid.
+- Chain: the post-processing's own measures (`post_level.post_metrics`) with no noise added, so the errors of the
+  measurement count as fluctuations; and the RMS error of the instantaneous fields.
+
+**What they show** (first run, VelociHub 1.2):
+
+| Hard images | PIV error, none → best (px) | PTV wrong links, none → best (%) | Best for the PIV | Best for the PTV |
+|---|---|---|---|---|
+| Cylinder (reflections) | 0.74 → 0.15 | 6.8 → 3.7 | POD 1 mode (+ edges: about the same) | POD 1 + edges |
+| Turbulence (reflections) | 0.60 → 0.19 | 7.2 → 4.6 | POD 1 + edges | POD 1 + edges |
+| Jet (still fluid around it) | 0.30 (none) | 5.0 (none) | None | None |
+
+- **The background removal (1 mode)** is what matters on images with reflections: it divides the error of the PIV by 3
+  to 5 and the wrong links of the PTV by about 1.5. On clean images it costs nothing.
+- **The contrast filters add little after it.** The edge enhancement is slightly the best, and capping changes
+  nothing. Min-max and Gaussian matching make the PTV link more particles, but more wrongly: up to almost 4 times the wrong
+  links and much shorter tracks. CLAHE is the worst: it doubles the error of the PIV and gives 4 to 5 times the wrong
+  links.
+- **The default recipe (6 modes + capping)** wipes the particles of single images in these 41-image sequences. The PIV
+  error goes from 0.015 to 1.95 px on the uniform flow, and the PTV keeps a third of its links, with tracks of 6
+  frames instead of 26. On longer recordings, the modes beyond the first should hold less of single images. Check it
+  on yours: the PIV quality of the pairs shows the ones that fail.
+- **Still fluid loses its particles to the background removal.** Around the jet, the fluid doesn't move, so its
+  particles are part of the mean image and get removed. The PIV error goes from 0.15 to 1.4 px.
+
+**The full chain** keeps the grid of the case, the units and the statistics of the samples to the rounding. The
+error of the mean of the PIV is 0.003–0.09 px on the steady flows, except the jet (the still fluid) and the modes
+(λ = 48 px isn't resolved by 32 px windows); 0.19 px for the turbulence, whose 200 maps (18 integral times) converge
+no closer. For the turbulence, the PIV windows lower the fluctuations: RMS of u at 0.83 of the modes'
+and dissipation at 0.52, against 0.93 and 0.70 for the PTV. With the background removal on, the cylinder with
+reflections has 0.63 times the error of the mean of the PIV and 0.57 times that of the PTV.
+
+## On a real recording
+
+The same recipes can be compared on your own images, which have no exact field:
+
+```bash
+python -m velocihub.benchmark --recording D:/Jet/Run_30 [--frames 100] [--recipes none pod1 pod1_edge] [--work folder]
+```
+
+- **The runs:** each recipe, then the PIV and the PTV, one run at a time. The images are linked into a work folder
+  (temporary, or `--work`, kept). The recording's folder is only read: the masks and the PIV windows come from its
+  `VelociHub_project.json` (or its `masks.json`), and the pre-processed images are exported as PNG. Run again with
+  the same `--work`, the runs that are up to date are skipped and only the measures are computed again.
+- **The measures need no exact field:**
+  - PIV: the valid vectors, the median peak ratio, and the spatial noise: the median distance of a vector from the
+    median of its 8 neighbours. This is the random error, plus the curvature of the flow, which is the same for
+    every recipe.
+  - PTV: the particles linked per pair, and the suspect links: those failing the normalized median test against
+    their 10 nearest links, an estimate of the wrong links. Also the track lengths, the particles detected and
+    tracked, and the cells of the binned field with a value.
+  - The median displacement is shown for reference. A binned PTV well below the PIV means fast particles that
+    aren't tracked: a matter of the tracking settings, not of the pre-processing.
+- **The report:** `benchmark_reports/recording_<name>_<date>_<time>`. It has the best recipe for each measure, a
+  chart, the tables and the time of each run.
+- **How long:** about 30 s per run for 41 frames of 1920 × 1200 px. 500 frames with the eight recipes take a
+  couple of hours.
+
 ## Checks and known issues
 
 A **check** compares a metric with a tolerance, or with another method's metric. The verification checks, against the
@@ -181,6 +279,13 @@ The known issues of VelociHub 1.2 (SPICY defaults), all at the processing level:
 | Worse at the edges of the field of view and of the masks (RBFs constrained on one side) | uniform, cylinder, blasius, turbulence |
 | SPICY on PIV vectors smooths out structures shorter than about 5 grid spacings: worse than the vectors it fits | jet, modes |
 | The wavelength of 3 grid spacings isn't resolved by SPICY on particles | modes |
+
+On particle images (levels images and chain):
+
+| Issue | Seen in |
+|---|---|
+| The default recipe removes 6 POD modes: with 41 images, the modes beyond the first hold the particles of single images, whose pairs fail | uniform, cylinder, jet, blasius, background removal (PIV); every case (PTV wrong links) |
+| The POD background removal takes the particles of still fluid for the background: the PIV/PTV find nothing there | jet |
 
 SPICY on particles now runs an outlier test of the links before its fit: the normalized median test of scattered data
 (`outlier_test` 3, `outlier_neighbours` 10; see `docs/processing.md`). With 2 % of the links wrong it catches 93–100 %
@@ -254,7 +359,7 @@ image fall below half their brightness (56 % without the offset): that pair woul
 
 ## Next
 
-- **The image level:** pre-processing → PIV/PTV → post on the test measurements, checked against their exact fields.
-  The background-removal measurement is the single ON/OFF case of the background removal through the chain.
-- **Which pre-processing filter helps the PTV/PIV most:** the same images, each filter of the pre-processing on or off,
-  compared by the accuracy of the PIV/PTV results.
+- **The default number of POD modes:** 6 removes the particles of single images of short recordings. An automatic
+  number (the threshold of the pre-processing page), or 1 by default, could be tested on the image level.
+- **The settings of the engines:** the PIV windows and the TracTrac settings, compared on the hard images as the
+  recipes are.

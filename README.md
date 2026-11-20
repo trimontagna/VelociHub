@@ -99,6 +99,11 @@ Tested on Windows 11 with Python 3.12-3.14, numpy 2.5, matplotlib 3.11, PaIRS-Un
 synthetic images of a jet (no data needed): the library, the Python API and batch, the interface (skipped without a
 display) and the PIV/PTV engines installed (PaIRS-UniNa, TracTrac; skipped otherwise).
 
+The benchmark on analytic flows (`tests/test_benchmark.py`, also **Tests > Benchmark** in the interface) writes its
+report to `benchmark_reports/report_<date>_<time>` in the repository (left out of git), one folder per run; its
+levels on particle images (pre-processing → PIV/PTV → post, about 20 minutes) run with `--benchmark-images`. See
+[docs/benchmark.md](docs/benchmark.md).
+
 ## Authors and licence
 
 VelociHub was developed by **Tristan Montagnier** (tristanmontagnier@gmail.com), made with

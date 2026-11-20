@@ -9,6 +9,8 @@ venv/
 .pytest_cache/
 # OneDrive conflict copies
 *-LAPTOP-*
+# The reports of the benchmark (velocihub/benchmark), one folder per run
+benchmark_reports/
 # Data and results of VelociHub (never committed)
 *.npz
 *.tif

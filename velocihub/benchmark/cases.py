@@ -65,6 +65,12 @@ LEVELS = {
     "processing": ("Processing → post", "Particle links and PIV vectors sampled from the exact field (without "
                                         "images), binned and regressed by VelociHub, saved as its results "
                                         "(vectors.npz) and post-processed: the fields against the exact field."),
+    "images": ("Pre-processing → processing", "Particle images of the flows pre-processed with several recipes, then "
+                                              "processed by the PIV (PaIRS-UniNa) and the PTV (TracTrac): the "
+                                              "fields, the correlation and the tracking against the exact field; on "
+                                              "harder images, which pre-processing helps them most."),
+    "chain": ("Full chain", "The test images with the background removal (1 POD mode), processed by the PIV and the "
+                            "PTV, with and without SPICY, and post-processed: the statistics against the exact ones."),
 }
 
 
@@ -249,6 +255,107 @@ def turbulence_post_checks():
     return checks
 
 
+# The known issues of the levels on images
+DEFAULT_MODES = ("The default recipe removes 6 POD modes: with 41 images, the modes beyond the first hold the particles "
+                 "of single images (their temporal coefficients peak there), so these images lose their particles and "
+                 "their pairs fail. 1 mode is enough here.")
+STILL_FLUID = ("The POD background removal takes the particles that don't move (the still fluid around the jet) for "
+               "the background: they are removed with the mean image, and the PIV/PTV find no particle there.")
+
+
+def image_checks(ref, piv_rms, links, wrong, link_rms, track, binned, piv_outliers=None, known=None):
+    """The checks of the level images on the test images of a case: the PIV and the PTV of the recipe ref (a
+    scenario: clean_pod1, or clean_none where the background removal fails) as they are; the background removal
+    (1 mode) costs nothing; the default recipe about as accurate as 1 mode. known: {"pod1": reason, "default_piv":
+    reason} for the comparisons that fail in this case."""
+    known = known or {}
+    kw = dict(level="images")
+    checks = [
+        below(ref, "piv", "rms", piv_rms, "PIV: RMS error of the displacement (px)", **kw),
+        above(ref, "piv", "valid", 98, "PIV: valid vectors (%)", **kw),
+        above(ref, "ptv", "links_per_pair", links, "PTV: particles linked per pair (median)", **kw),
+        below(ref, "ptv", "wrong_links", wrong, "PTV: wrong links, beyond 1 px (%)", **kw),
+        below(ref, "ptv", "link_rms", link_rms, "PTV: RMS error of the right links (px)", **kw),
+        above(ref, "ptv", "track_length_median", track, "PTV: median length of the tracks (frames)", **kw),
+        below(ref, "ptv", "rms", binned, "PTV binned on the grid: RMS error (px)", **kw),
+        below("clean_pod1", "piv", "rms", "clean_none:piv.rms",
+              "Background removal (1 mode) on images without reflections: the PIV as accurate as without",
+              factor=1.25, known_issue=known.get("pod1", ""), **kw),
+        below("clean_pod1", "ptv", "rms", "clean_none:ptv.rms",
+              "Background removal (1 mode) on images without reflections: the PTV as accurate as without",
+              factor=1.3, known_issue=known.get("pod1", ""), **kw),
+        below("clean_default", "piv", "rms", "clean_pod1:piv.rms",
+              "The default recipe (6 modes + capping): the PIV about as accurate as with 1 mode", factor=1.25,
+              known_issue=known.get("default_piv", ""), **kw),
+        below("clean_default", "ptv", "wrong_links", "clean_pod1:ptv.wrong_links",
+              "The default recipe (6 modes + capping): the PTV with at most twice the wrong links of 1 mode",
+              factor=2.0, known_issue=DEFAULT_MODES, **kw),
+    ]
+    if piv_outliers is not None:
+        checks.append(below(ref, "piv", "outliers", piv_outliers, "PIV: outliers, beyond 0.5 px (%)", **kw))
+    return checks
+
+
+def hard_checks(piv_rms, wrong, ref="hard_pod1", known=""):
+    """The checks of the hard images of a flow (dim particles, noise, reflections): the PIV and the PTV of ref as
+    they are, and what the background removal brings (known: the reason it fails)."""
+    kw = dict(level="images")
+    return [
+        below(ref, "piv", "rms", piv_rms, "Hard images: RMS error of the PIV (px)", **kw),
+        below(ref, "ptv", "wrong_links", wrong, "Hard images: wrong links of the PTV (%)", **kw),
+        below("hard_pod1", "piv", "rms", "hard_none:piv.rms",
+              "Hard images, with reflections: the background removal (1 mode) halves the error of the PIV at least",
+              factor=0.5, known_issue=known, **kw),
+        below("hard_pod1", "ptv", "wrong_links", "hard_none:ptv.wrong_links",
+              "Hard images, with reflections: the background removal (1 mode) leaves fewer wrong links to the PTV",
+              factor=0.85, known_issue=known, **kw),
+    ]
+
+
+def chain_checks(mean, vort, extra=()):
+    """The checks of the full chain of a case (the test images, background removal of 1 mode, PIV/PTV, SPICY,
+    post-processing): the results on the grid of the case, read with the camera and post-processed to the rounding;
+    the error of the mean of each method (mean: {method: px}) and of its vorticity (vort: {method: 1/pair})."""
+    kw = dict(level="chain")
+    names = {"piv": "PIV", "ptv": "PTV", "piv_spicy": "PIV + SPICY", "ptv_spicy": "PTV + SPICY"}
+    checks = []
+    for method in ("piv", "ptv"):
+        checks += [
+            below("clean", method, "positions_error", 1e-6,
+                  f"{names[method]}: the grid of the results is that of the case (px)", **kw),
+            below("clean", method, "units_error", ROUNDING,
+                  f"{names[method]}: velocities = displacements × pixel pitch × frame rate (px)", **kw),
+            below("clean", method, "mean_vs_samples", ROUNDING,
+                  f"{names[method]}: post-processed mean = mean of the samples (px)", **kw),
+        ]
+    checks += [below("clean", method, "mean_error", limit,
+                     f"{names[method]}: RMS error of the post-processed mean (px)", **kw)
+               for method, limit in mean.items()]
+    checks += [below("clean", method, "vort_mean_error", limit,
+                     f"{names[method]}: RMS error of the vorticity of the mean (10⁻³/pair)", **kw)
+               for method, limit in vort.items()]
+    return checks + list(extra)
+
+
+def turbulence_chain_checks():
+    """The statistics of the turbulence through the whole chain (200 maps: their convergence and the filter of the
+    PIV windows, which lowers the fluctuations and the dissipation)."""
+    kw = dict(level="chain")
+    out = []
+    for method, name, ranges in (
+            ("piv", "PIV", {"rms_u_ratio": (0.75, 0.92), "rms_v_ratio": (0.84, 1.0), "lx_u_ratio": (0.85, 1.03),
+                            "ly_u_ratio": (0.95, 1.15), "t_ratio": (0.84, 1.03), "dissipation_ratio": (0.42, 0.62)}),
+            ("ptv", "PTV", {"rms_u_ratio": (0.85, 1.01), "rms_v_ratio": (0.93, 1.09), "lx_u_ratio": (0.79, 0.97),
+                            "ly_u_ratio": (0.9, 1.09), "t_ratio": (0.75, 0.92), "dissipation_ratio": (0.6, 0.8)})):
+        labels = {"rms_u_ratio": "RMS of u / that of the modes", "rms_v_ratio": "RMS of v / that of the modes",
+                  "lx_u_ratio": "integral length L_x^u / that of the modes",
+                  "ly_u_ratio": "integral length L_y^u / that of the modes",
+                  "t_ratio": "integral time T_u / (L_x^u / U0)", "dissipation_ratio": "dissipation ε / exact ε"}
+        out += [within("clean", method, metric, low, high, f"{name}: {labels[metric]}", **kw)
+                for metric, (low, high) in ranges.items()]
+    return out
+
+
 @dataclass
 class Case:
     """A flow of the benchmark (flows.py: its key) with its sampling and its checks. seeding: particles per pixel of
@@ -277,19 +384,33 @@ def _cases():
             within("nominal", "spicy_ptv", "bias_u", -0.015, 0.015, "SPICY (PTV): no bias of U (px)"),
             within("nominal", "spicy_ptv", "bias_v", -0.015, 0.015, "SPICY (PTV): no bias of V (px)"),
             below("nominal", "spicy_ptv", "rms_edge", 0.3, "SPICY (PTV): RMS error at the edges of the grid (px)"),
-        ] + post_checks(vort=ROUNDING), seed=10),
+        ] + post_checks(vort=ROUNDING)
+          + image_checks("clean_pod1", piv_rms=0.02, links=840, wrong=0.3, link_rms=0.12, track=20, binned=0.089,
+                         piv_outliers=0.5, known={"default_piv": DEFAULT_MODES})
+          + chain_checks(mean={"piv": 0.01, "ptv": 0.015, "piv_spicy": 0.09, "ptv_spicy": 0.034},
+                         vort={"piv": 0.0005, "ptv": 0.0006}), seed=10),
         Case("cylinder", common_checks(rms=0.18, rms_piv=0.18, vort=0.0095, known={
             "better_than_binning": FEW_PER_RBF, "edges": EDGES}) + [
             below("nominal", "spicy_ptv", "rms_body", 0.35, "SPICY (PTV): RMS error next to the cylinder (px)"),
             within("nominal", "spicy_ptv", "peak_speed_ratio", 0.95, 1.06,
                    "SPICY (PTV): highest speed / exact (the shoulders of the cylinder)"),
-        ] + post_checks(vort=0.003, gradient=0.9), seed=20),
+        ] + post_checks(vort=0.003, gradient=0.9)
+          + image_checks("clean_pod1", piv_rms=0.13, links=840, wrong=0.3, link_rms=0.2, track=22, binned=0.19,
+                         piv_outliers=1.6, known={"default_piv": DEFAULT_MODES})
+          + hard_checks(piv_rms=0.19, wrong=5.3)
+          + chain_checks(mean={"piv": 0.12, "ptv": 0.091, "piv_spicy": 0.21, "ptv_spicy": 0.082},
+                         vort={"piv": 0.004, "ptv": 0.0027}), seed=20),
         Case("jet", common_checks(rms=0.15, rms_piv=0.21, vort=0.03, known={
             "piv_better_than_noise": PIV_RESOLUTION}) + [
             below("nominal", "spicy_ptv", "half_width_error", 1.0, "SPICY (PTV): RMS error of the jet half-width (px)"),
             above("nominal", "spicy_ptv", "shear_ratio", "exact.shear_ratio",
                   "SPICY (PTV): peak shear at least that of the exact field on the grid", factor=0.95),
-        ] + post_checks(vort=0.03, gradient=14), seed=30),
+        ] + post_checks(vort=0.03, gradient=14)
+          + image_checks("clean_none", piv_rms=0.19, links=960, wrong=0.3, link_rms=0.16, track=31, binned=0.24,
+                         piv_outliers=0.6, known={"pod1": STILL_FLUID, "default_piv": DEFAULT_MODES})
+          + hard_checks(piv_rms=0.39, wrong=6.6, ref="hard_none", known=STILL_FLUID)
+          + chain_checks(mean={"piv": 0.56, "ptv": 0.16, "piv_spicy": 0.32, "ptv_spicy": 0.16},
+                         vort={"piv": 0.047, "ptv": 0.042}), seed=30),
         Case("modes", common_checks(rms=0.9, rms_piv=1.15, vort=0.15, known={
             "better_than_binning": UNRESOLVED, "residual": UNRESOLVED, "piv_better_than_noise": PIV_RESOLUTION}) + [
             above("nominal", "spicy_ptv", "transfer_320", 0.97, "SPICY (PTV): amplitude kept at λ = 320 px"),
@@ -302,7 +423,9 @@ def _cases():
             below("exact", "post", "gradient_transfer_theory_error", 0.005,
                   "Mean dU/dY: amplitude kept at each wavelength = theory, sin(kh)/kh × the Gaussian smoothing "
                   "(largest difference)", level="post"),
-        ], seed=40),
+        ] + image_checks("clean_pod1", piv_rms=0.93, links=880, wrong=2.1, link_rms=0.34, track=11, binned=0.72)
+          + chain_checks(mean={"piv": 0.89, "ptv": 0.48, "piv_spicy": 1.3, "ptv_spicy": 0.89},
+                         vort={"piv": 0.17, "ptv": 0.14}), seed=40),
         Case("blasius", common_checks(rms=0.15, rms_piv=0.125, vort=0.008, known={"edges": EDGES}) + [
             below("nominal", "spicy_ptv", "displacement_thickness_error", 6.5,
                   "SPICY (PTV): RMS error of the displacement thickness δ* (%)"),
@@ -316,10 +439,18 @@ def _cases():
             within("exact", "post", "wall_gradient_ratio_after", 0.95, 1.1,
                    "Mean dU/dY smoothed after the differences, next to the wall / exact (none without the toggle)",
                    level="post"),
-        ], seed=50),
+        ] + image_checks("clean_pod1", piv_rms=0.067, links=880, wrong=0.3, link_rms=0.19, track=23, binned=0.16,
+                         piv_outliers=0.5, known={"default_piv": DEFAULT_MODES})
+          + chain_checks(mean={"piv": 0.065, "ptv": 0.056, "piv_spicy": 0.11, "ptv_spicy": 0.034},
+                         vort={"piv": 0.0034, "ptv": 0.0027}), seed=50),
         Case("turbulence", common_checks(rms=0.16, rms_piv=0.16, vort=0.014, known={"edges": EDGES})
              + post_checks(vort=0.001, steady=False)
-             + turbulence_post_checks(), seed=60),
+             + turbulence_post_checks()
+             + image_checks("clean_pod1", piv_rms=0.19, links=670, wrong=0.3, link_rms=0.23, track=23, binned=0.27,
+                            piv_outliers=0.5)
+             + hard_checks(piv_rms=0.26, wrong=6.6)
+             + chain_checks(mean={"piv": 0.25, "ptv": 0.27, "piv_spicy": 0.26, "ptv_spicy": 0.29},
+                            vort={"piv": 0.0087, "ptv": 0.0092}, extra=turbulence_chain_checks()), seed=60),
     ]
 
 
@@ -363,6 +494,27 @@ def _background_checks():
             pod(sc, ">=", "particle_kept_p05", 60, f"{what}: the 5 % dimmest particles keep at least (% of their "
                                                    "brightness, each one measured)"),
             pod(sc, "<=", "particles_dimmed", 3, f"{what}: particles dimmed below half their brightness (%)"),
+        ]
+    # Its images through the PIV/PTV (level images) and the post-processing (level chain): on and off
+    checks += [
+        below("clean_pod1", "piv", "rms", "clean_none:piv.rms",
+              "Through the PIV: the background removal (1 mode) lowers the error of the displacement", factor=0.75,
+              level="images"),
+        below("clean_pod1", "ptv", "wrong_links", "clean_none:ptv.wrong_links",
+              "Through the PTV: the background removal (1 mode) halves the wrong links at least", factor=0.5,
+              level="images"),
+        below("clean_default", "piv", "rms", "clean_pod1:piv.rms",
+              "The default recipe (6 modes + capping): the PIV about as accurate as with 1 mode", factor=1.25,
+              known_issue=DEFAULT_MODES, level="images"),
+    ]
+    for method, name in (("piv", "PIV"), ("ptv", "PTV")):
+        checks += [
+            below("on", method, "mean_error", f"off:{method}.mean_error",
+                  f"Full chain, {name}: the background removal lowers the error of the mean", factor=0.8,
+                  level="chain"),
+            below("on", method, "vort_mean_error", f"off:{method}.vort_mean_error",
+                  f"Full chain, {name}: the background removal lowers the error of the vorticity of the mean",
+                  factor=0.8, level="chain"),
         ]
     return checks
 
