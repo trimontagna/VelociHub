@@ -8,6 +8,13 @@ Modules: `velocihub/fields.py` (`load_vectors`, `VectorFields`, `FieldSettings`,
 `velocihub/postprocessing.py` (`PostProcessing`, `PostSettings`, the figures), `velocihub/lagrangian.py` (PTV),
 `velocihub/imaging.py` (images and POD); page: `velocihub/gui/postprocessing_page.py`.
 
+![The page Post-processing](images/postprocessing.png)
+
+*The page Post-processing on the PIV of the synthetic turbulence of the [benchmark](benchmark.md) (field of view 102.4
+mm, 1 kHz, physical space): the four tiles show the instantaneous velocity |u| of map 60, the mean velocity ū, its
+standard deviation σ_u and the instantaneous vorticity ω. Right: the side panel (vector fields, camera and
+acquisition, scale space, recipe, export).*
+
 ## Features
 
 - **Inputs**: the results of the Velocimetry page (`PIV/vectors.npz`, or `PTV/`), any other `vectors.npz`, or a folder of
@@ -40,6 +47,16 @@ Modules: `velocihub/fields.py` (`load_vectors`, `VectorFields`, `FieldSettings`,
   and spectrum of the pre-processing.
 - **Exports**: PNG figures (LaTeX labels with Computer Modern math), videos (GIF or MP4) of instantaneous figures,
   `metrics.json` (key numbers), `postprocessing.json` (the recipe); a **Quantities...** window chooses what to export.
+
+<p><img src="images/postprocessing_compare.png" width="49%" alt="Two maps compared with a wiper"> <img src="images/postprocessing_contour.png" width="49%" alt="An isocontour on a map"></p>
+
+*Left: a tile comparing |u| (left of the wiper) with ω (right of it), each with its colour bar; the slider below the
+figure moves the wiper. Right: an isocontour of σ_u, its level chosen with the slider below the map.*
+
+![The page Post-processing on a PTV](images/postprocessing_ptv.png)
+
+*The results of the PTV (TracTrac) of the same images: the tracks of the particles over a few frames, the particles
+per cell, the lengths of the tracks and the mean material acceleration of the particles.*
 
 ## Figure catalogue
 
@@ -85,6 +102,11 @@ Every figure states in its title the reference quantities it uses.
   The medians are in `metrics.json` (physical space).
 
 ## Parameters
+
+<img src="images/postprocessing_panel.png" width="300" alt="Side panel of the page Post-processing">
+
+*The side panel, from the top: the vector fields loaded, the camera and acquisition, the scale space, the recipe
+(scrolled further: reference quantities, peak locking, jet theory...) and the export.*
 
 ### Vector fields
 
@@ -157,6 +179,12 @@ Every figure states in its title the reference quantities it uses.
 | Singular (Ctrl+E) | `post.export(...)` | Writes the files. |
 | Video... (tile) | `post.export_video(key, folder, step=1, fps=10, maps=None, fmt="gif")` | Video of exactly what a tile shows. |
 | Batch... | `velocihub.batch.postprocess_folder(s)` | See [batch-processing.md](batch-processing.md). |
+
+<p><img src="images/quantities.png" width="62%" alt="The window Quantities"> <img src="images/video.png" width="36%" alt="The window of the video of a tile"></p>
+
+*Left: Export > Quantities..., the figures and videos exported (by group, as in the menus of the tiles), with the
+global settings of the videos and of the instantaneous maps and the parameters of the quantity selected. Right:
+Video... of a tile, exactly what the tile shows over the maps chosen.*
 
 ### Statistics
 

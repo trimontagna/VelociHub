@@ -32,7 +32,8 @@ from .fields import load_vectors
 from .pipelines import DEFAULT_PIPELINE, chosen_results, results_folders, selected_results
 from .postprocessing import PostProcessing, PostSettings
 from .preprocessing import (DEFAULT_CONTRAST, DEFAULT_EXPORT_FORMAT, DEFAULT_MODES, PREPROCESSING_FOLDER, ContrastSettings,
-                            DEFAULT_BACKGROUND_OFFSET, PODBackgroundRemoval, background_offset_of, export_format_of)
+                            DEFAULT_BACKGROUND_OFFSET, PODBackgroundRemoval, background_offset_of, export_format_of,
+                            same_path)
 from .project import PROJECT_FILE, read_project, write_project
 from .settings import (camera_of, camera_record, export_spec, piv_from_project, piv_to_project, post_from_project, post_to_project,
                        preprocessing_from_project, preprocessing_to_project, settings_from_record, settings_record,
@@ -167,10 +168,17 @@ class Project:
         engine: "PaIRS-UniNa" or "TracTrac" (name or key); settings: the settings of the engine (a dictionary,
         merged with those it has), or as keywords (windows=(128, 64, 32), overlap=50, particle_size=3...; see
         docs/processing.md); regression: None (unchanged), "none", "spicy", or {"method": "spicy", "settings": {...}};
-        output_folder: the folder of the results, relative to the project (PIV, or PTV for TracTrac, by default)."""
+        output_folder: the folder of the results, relative to the project (PIV, or PTV for TracTrac, by default). As in
+        the page, another engine takes its own default folder unless another folder than the default of the previous
+        one was chosen."""
         s = dict(self.piv)
+        previous = s.get("engine")
         if engine is not None:
             s["engine"] = piv.get_engine(engine).key
+            folder = s.get("output_folder")
+            if (output_folder is None and previous and previous != s["engine"]
+                    and (not folder or same_path(folder, piv.get_engine(previous).results_folder))):
+                s["output_folder"] = piv.get_engine(s["engine"]).results_folder
         s = validate_piv(s)  # The settings of the engine chosen
         engine = piv.get_engine(s["engine"], **(s.get("options") or {}))
         merged = engine.check({**(s.get("settings") or {}), **(settings or {}), **engine_settings})

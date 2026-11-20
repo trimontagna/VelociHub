@@ -86,6 +86,14 @@ The window has a panel **Projects** on the left (the workspace), one page per st
 tiles in the middle; the arrow keys browse the images or maps of the tile under the mouse, and the tiles that show the
 same series follow each other.
 
+![The window of VelociHub](images/preprocessing.png)
+
+*The window on the page Pre-processing (the synthetic turbulence of the [benchmark](benchmark.md)): the panel Projects
+on the left, the tiles of the page in the middle (the image with the recipe applied right of the wiper, the first POD
+mode, the spectrum and the temporal coefficient of the mode), its settings on the right and the status log at the
+bottom. Each page is shown in its part of the documentation: [pre-processing](preprocessing.md),
+[processing](processing.md), [post-processing](postprocessing.md).*
+
 ## 4. Tutorial: a first measurement
 
 The example is a folder of time-resolved PIV images of a jet, `D:/Jet/Run_30`, 500 images of 1920 x 1200 px taken at

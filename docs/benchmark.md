@@ -48,6 +48,12 @@ about 70 MB) and opens them as the workspace of the interface: test mode. **Back
 user's own workspace. The equivalent command is `python -m velocihub.benchmark --test-workspace [folder] [cases ...]`.
 The default folder is `~/VelociHub/benchmarks/test_workspace`.
 
+The pictures of the documentation are those of the turbulence case, processed as a measurement: `python
+tools/doc_screenshots.py` renders its images (`~/VelociHub/examples/Turbulence` by default, `--example` another
+folder), runs the pre-processing, the PIV (PaIRS-UniNa), the PTV (TracTrac) and the post-processing with the API, then
+opens the interface on it (scratch preferences) and captures each page and window into `docs/images` (Windows; keep
+the window uncovered meanwhile).
+
 Each case is a measurement folder, like real data:
 - `img_0000.tif ...`: a time-resolved sequence. The steady flows have 41 frames and the turbulence 201. The pairs are
   consecutive frames, so the flow's displacement is per frame.

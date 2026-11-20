@@ -75,8 +75,8 @@ def displacement_limits(key, F):
 
 def grid_pixels(fields):
     """Positions of the vectors in the image (px from its top-left corner, y downwards): the vector fields read in
-    pixels (load_vectors(..., pixels=True)) have y upwards from the middle of the height of the image."""
-    return fields.x, fields.settings["image_px"][1] / 2 - fields.y
+    pixels (load_vectors(..., pixels=True)) have y upwards from the bottom of the image."""
+    return fields.x, fields.settings["image_px"][1] - fields.y
 
 
 def pair_displacements(fields, k, tracks=None):

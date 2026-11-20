@@ -17,6 +17,13 @@ Modules: `velocihub/piv/` (`base.py`: `PIVRun`, `Camera`, engines; `pairs_engine
 `regression.py`; `particles.py`), page: `velocihub/gui/piv_page.py`. Other engines can be added: subclass
 `PIVEngine`, decorate it with `@register` (see `base.py`).
 
+![The page Velocimetry with a PIV](images/velocimetry_piv.png)
+
+*The page Velocimetry after a PIV with PaIRS-UniNa (windows of 64 and 32 px, 50 % overlap) of the synthetic turbulence
+of the [benchmark](benchmark.md): pair 61 with its vectors (x 3) and the three windows of the particle diagnostic, the
+largest magnified on the right (57, 12 and 3 particles: the 16 px window has too few); below, the valid vectors and
+the median correlation peak ratio of the 200 pairs. Right: the side panel, with the settings of the engine.*
+
 ## Features
 
 - **Images used**: those exported by the pre-processing with the current recipe (exported first if needed, the POD
@@ -40,9 +47,23 @@ Modules: `velocihub/piv/` (`base.py`: `PIVRun`, `Camera`, engines; `pairs_engine
   binning); click a point to show that pair.
 - **Masks**: vectors whose window centre is masked get status 2 (masked) and are excluded everywhere.
 
+![The page Velocimetry with a PTV](images/velocimetry_ptv.png)
+
+*The same pairs tracked by TracTrac (PTV), view Displacement |d|: the particles tracked in pair 61, coloured by their
+displacement. Below: the particles tracked per pair and the histogram of the lengths of the tracks.*
+
+<img src="images/velocimetry_piv_displacement.png" width="480" alt="View Displacement |d| of a PIV">
+
+*View Displacement |d| of the PIV: the map on its grid, the vectors drawn over it.*
+
 ## Parameters
 
 ### Images and run (side panel)
+
+<img src="images/velocimetry_panel.png" width="300" alt="Side panel of the page Velocimetry">
+
+*The side panel: the images used, the particles in the windows, the PIV/PTV software and its settings (scrolled
+further: the regression) and the run step (results folder, Run on this pair, Batch... and Singular).*
 
 | Interface | API | Meaning |
 |---|---|---|

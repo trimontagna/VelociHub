@@ -40,6 +40,23 @@ def check_jet(post, window=16):
     assert profile[0] < profile[centre] / 2 and profile[-1] < profile[centre] / 2
 
 
+def test_grid_in_the_image(measurements):
+    """The grid of the vector fields read in pixels placed in the image as the PIV saved it (x_px, y_px from the
+    top-left corner): each displacement at its own position (the tile of the pair and its vectors)."""
+    from velocihub.fields import load_vectors
+    from velocihub.piv.displacements import grid_pixels
+
+    path = os.path.join(measurements["piv"], "PIV", "vectors.npz")
+    raw = np.load(path, allow_pickle=True)
+    fields = load_vectors(path, pixels=True)
+    x, y = grid_pixels(fields)
+    saved = {(float(a), float(b)): float(u) for a, b, u in zip(raw["x_px"].ravel(), raw["y_px"].ravel(),
+                                                                raw["u_px"][0].ravel())}
+    shown = {(float(a), float(b)): float(u) for a, b, u in zip(x.ravel(), y.ravel(), fields.u_px[0].ravel())}
+    assert shown.keys() == saved.keys()
+    assert all(np.isclose(shown[k], saved[k], equal_nan=True) for k in saved)
+
+
 def test_pairs(copy):
     post = run("pairs", {"windows": (32, 16), "overlap": 50}, copy)
     check_jet(post)

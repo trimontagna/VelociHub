@@ -11,6 +11,11 @@ VelociHub takes a set of PIV images all the way to velocity fields and their fig
 | **Jet theory (add-on)** | The potential core of a jet (velocity level or peak skewness), its profiles and centreline, and the presets of the jet measurements (`velocihub/jet`, `PostSettings(jet_theory=True)`). |
 | **Archiving (add-on)** | Projects packed into ZIP/TAR archives, and the post-processing + stitching of several fields of view of an archive. |
 
+![The page Post-processing of VelociHub](docs/images/postprocessing.png)
+
+*The page Post-processing on the synthetic turbulence of the benchmark: instantaneous velocity and vorticity, mean
+velocity and its standard deviation, with the projects of the workspace on the left and the settings on the right.*
+
 Every setting and result is kept in a project file (`VelociHub_project.json`) next to the images, so a folder opened
 again comes back as you left it. Everything also has a Python API that does exactly what the interface does, with the
 same parameters:
@@ -58,6 +63,10 @@ The full tutorial is in [docs/installation.md](docs/installation.md).
 | [Python API](docs/api.md) | `vh.Project` (a measurement as the interface sees it: settings, save, run), batch and stitching helpers, and the objects of each step: every action of the interface from Python, with the same parameters |
 | [Packaging](docs/packaging.md) | Building and installing VelociHub with pip and conda |
 | [Credits](CREDITS.md) | Authors and licences of all the software VelociHub uses |
+
+The pictures of this documentation show the synthetic turbulence of the [benchmark](docs/benchmark.md) (512 x 320 px,
+201 frames), pre-processed, processed by PIV and PTV and post-processed; `python tools/doc_screenshots.py` makes them
+again.
 
 ## Commands
 
