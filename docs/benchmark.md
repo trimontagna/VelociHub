@@ -258,8 +258,36 @@ python -m velocihub.benchmark --recording D:/Jet/Run_30 [--frames 100] [--recipe
     aren't tracked: a matter of the tracking settings, not of the pre-processing.
 - **The report:** `benchmark_reports/recording_<name>_<date>_<time>`. It has the best recipe for each measure, a
   chart, the tables and the time of each run.
-- **How long:** about 30 s per run for 41 frames of 1920 × 1200 px. 500 frames with the eight recipes take a
-  couple of hours.
+- **How long:** about 30 s per run for 41 frames of 1920 × 1200 px; 500 frames with the eight recipes, about 2
+  hours (7 minutes per run).
+
+**A jet recording** (`Test_Run_30_500f`: 500 frames of 1920 × 1200 px, 8-bit and very dark, 99 % of the pixels at 4
+grey levels or less; its mask of the nozzle; PIV windows 128 64 32 px, 50 % overlap):
+
+| Recipe | PIV valid (%) | PIV peak ratio | PIV spatial noise (px) | PTV links per pair | PTV suspect links (%) | PTV mean track (frames) |
+|---|---|---|---|---|---|---|
+| None | 96.8 | 2.99 | 0.238 | 9 462 | 3.28 | 10.7 |
+| POD, 1 mode | 96.8 | 2.99 | 0.236 | 9 526 | 3.34 | 10.5 |
+| Default (POD 6 modes + capping) | 96.7 | 3.03 | 0.230 | 9 701 | 3.55 | 9.9 |
+| POD 1 + capping | 96.7 | 3.03 | 0.230 | 9 675 | 3.48 | 10.3 |
+| POD 1 + min-max | 97.0 | 3.03 | 0.231 | 10 970 | 3.39 | 12.7 |
+| POD 1 + CLAHE | 97.3 | 3.19 | 0.219 | 10 993 | 3.72 | 11.2 |
+| POD 1 + edges | 95.9 | 2.86 | 0.233 | 10 994 | 3.37 | 10.8 |
+| POD 1 + Gaussian matching | 97.1 | 3.01 | 0.229 | 11 482 | 3.43 | 13.4 |
+
+- **The PIV barely changes:** valid vectors within 1.5 %, peak ratio within 11 %. The background removal changes
+  nothing: this recording has little stationary background. CLAHE scores best on all three measures, yet on the
+  hard synthetic images it doubles the error of the PIV. A higher peak ratio or fewer replaced vectors doesn't
+  mean a more accurate field, so these measures rank the recipes, not their accuracy.
+- **The default 6 modes cost nothing here**, unlike on the 41-image sequences of the benchmark: with 500 images,
+  the modes beyond the first hold little of single images.
+- **The PTV links 16–21 % more particles** with min-max, edges or Gaussian matching. Gaussian matching and min-max
+  also give the longest tracks (mean 13.4 and 12.7 frames, against 10.7), at a slightly higher share of suspect
+  links (3.4 % against 3.3 %). On the hard synthetic images, the same filters raised the actual wrong links 2 to
+  4 times. The median test misses wrong links that agree with their neighbours, so check these on a known flow.
+- **The binned PTV** covers 58 % of the cells, with a median displacement of 4.0 px against 6.4 px for the PIV:
+  TracTrac with its defaults misses the fast particles of the jet's core (up to 20 px per frame). Its settings
+  (search radius, motion model) matter more here than the pre-processing.
 
 ## Checks and known issues
 
