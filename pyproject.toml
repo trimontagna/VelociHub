@@ -46,8 +46,8 @@ test = ["pytest>=7"]
 all = ["velocihub[ptv,regression,video]"]
 
 [project.urls]
-Repository = "https://github.com/RexAttaque/VelociHub"
-Documentation = "https://github.com/RexAttaque/VelociHub/tree/main/docs"
+Repository = "https://github.com/trimontagna/VelociHub"
+Documentation = "https://github.com/trimontagna/VelociHub/tree/main/docs"
 
 [project.scripts]
 velocihub = "velocihub.cli:gui"

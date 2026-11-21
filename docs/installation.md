@@ -44,18 +44,18 @@ Python 3.14.8 (and 3.12, 3.13); `environment.yml` installs the first table from 
 ### Option A: pip (from the repository)
 
 ```bash
-git clone https://github.com/RexAttaque/VelociHub.git
+git clone https://github.com/trimontagna/VelociHub.git
 cd VelociHub
 python -m pip install -e ".[all]"     # -e: editable, the code of the clone is used directly
 ```
 
-Without cloning: `python -m pip install "velocihub[all] @ git+https://github.com/RexAttaque/VelociHub.git"`
+Without cloning: `python -m pip install "velocihub[all] @ git+https://github.com/trimontagna/VelociHub.git"`
 (a private repository needs your GitHub credentials).
 
 ### Option B: conda
 
 ```bash
-git clone https://github.com/RexAttaque/VelociHub.git
+git clone https://github.com/trimontagna/VelociHub.git
 cd VelociHub
 conda env create -f environment.yml   # environment "velocihub": dependencies from conda-forge + VelociHub (editable)
 conda activate velocihub

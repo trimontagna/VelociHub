@@ -54,7 +54,7 @@ version of each package is in [docs/installation.md](docs/installation.md).
 
 ```bash
 # 1. VelociHub (Python 3.12 or later)
-git clone https://github.com/RexAttaque/VelociHub.git
+git clone https://github.com/trimontagna/VelociHub.git
 cd VelociHub
 pip install -e ".[all]"            # or: conda env create -f environment.yml
 
