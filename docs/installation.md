@@ -2,6 +2,8 @@
 
 ## 1. What you need
 
+VelociHub needs two Python environments, then is installed with pip or conda ([section 2](#2-install)):
+
 - **Python 3.12 or later** for VelociHub (tested with 3.12, 3.13 and 3.14).
 - **A second Python, 3.10 to 3.13, for PaIRS-UniNa**, the PIV engine. PaIRS-UniNa is a compiled library that only
   exists for those versions, so it runs in its own process with its own interpreter. VelociHub finds it among your
@@ -22,11 +24,20 @@
 | opencv-python | 5.0 | CLAHE, filters, TracTrac | `pip install velocihub` |
 | psutil | 7.2 | memory available for the POD | `pip install velocihub` |
 | imutils, parse, h5py | 0.5 / 1.22 / 3.15 | PTV (TracTrac) | `pip install "velocihub[ptv]"` |
-| spicy_vki | 1.1 | regression of the vector fields | `pip install "velocihub[regression]"` |
-| imageio-ffmpeg | 0.4+ | MP4 videos (GIF otherwise) | `pip install "velocihub[video]"` |
-| PaIRS-UniNa | 0.2.12 | PIV (separate Python 3.10-3.13) | `environment-pairs.yml` |
+| spicy_vki | 1.1.2 | regression of the vector fields (SPICY) | `pip install "velocihub[regression]"` |
+| imageio-ffmpeg | 0.4 or later | MP4 videos (GIF otherwise) | `pip install "velocihub[video]"` |
+| pytest | 9.2 | the tests | `pip install "velocihub[test]"` |
+| Tkinter | with Python | the interface | Python on Windows and macOS, conda (`tk`); `python3-tk` on Debian/Ubuntu |
 
-`velocihub[all]` installs the PTV, regression and video extras together.
+The PIV engine, in its own environment (Python 3.13.18 tested):
+
+| Package | Version tested | Required for | Installed by |
+|---|---|---|---|
+| PaIRS-UniNa | 0.2.12 | PIV | `environment-pairs.yml`, or `pip install PaIRS-UniNa` |
+| numpy, scipy, matplotlib, pillow, PySide6 | 2.5 / 1.18 / 3.11 / 13.0 / 6.12 | PaIRS-UniNa itself | with PaIRS-UniNa |
+
+`velocihub[all]` installs the PTV, regression and video extras together. VelociHub's environment was tested with
+Python 3.14.8 (and 3.12, 3.13); `environment.yml` installs the first table from conda-forge (SPICY with pip), except pytest.
 
 ## 2. Install
 

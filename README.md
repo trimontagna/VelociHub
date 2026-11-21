@@ -1,10 +1,6 @@
 # VelociHub
 
-VelociHub covers the entire particle velocimetry pipeline, from pre-processing, to processing, to post-processing with various fields and quantities able to be observed, in one Graphical Interface or via Python.
-
-Be aware that this tool is vibe coded, but validated with established PIV solutions (DynamicStudio from Dantec Dynamics). That said, bugs and incoherences may still occur, despite heavy unit and manual testing. Do not hesitate to report any issues you may find or contribute ideas to improve the software.
-
-The documentation is also work-in-progress, with the first main objective to go over the tooltips of the software to streamline the help queues given to the user. The documentation of the repository is also work-in-progress. Keep in mind that this tool was built during a lab which lasted two weeks, past that time frame, it's a hobby project essentially.
+VelociHub takes a set of PIV images all the way to velocity fields and their figures, in one interface or from Python:
 
 | Part | What it does |
 |---|---|
@@ -36,6 +32,25 @@ p.run()           # pre-processing, PIV, post-processing
 ```
 
 ## Quick start
+
+VelociHub needs two Python environments: its own (Python 3.12 or later), and one for the PIV engine PaIRS-UniNa
+(Python 3.10 to 3.13, the only versions it exists for), which VelociHub runs in its own process. The PTV (TracTrac)
+needs no second environment.
+
+| Package | Needed for | Installed by |
+|---|---|---|
+| Python 3.12+ | VelociHub | — |
+| numpy, scipy, matplotlib, contourpy, pillow, opencv-python, psutil | VelociHub | `pip install -e .` (or `environment.yml`) |
+| Tkinter | The interface | Included with Python on Windows and macOS, and with conda; `python3-tk` on Debian/Ubuntu |
+| imutils, parse, h5py | The PTV with TracTrac (vendored in VelociHub) | `pip install -e ".[ptv]"` |
+| spicy_vki | The regression of the vector fields (SPICY) | `pip install -e ".[regression]"` |
+| imageio-ffmpeg | MP4 videos (GIF without it) | `pip install -e ".[video]"` |
+| pytest | The tests | `pip install -e ".[test]"` |
+| Python 3.10-3.13 with PaIRS-UniNa (it brings numpy, scipy, matplotlib, PySide6) | The PIV | `environment-pairs.yml`, or `pip install PaIRS-UniNa` in that Python |
+
+`.[all]` installs the PTV, regression and video extras together. Tested on Windows 11 with Python 3.12-3.14, numpy
+2.5, scipy 1.18, matplotlib 3.11, opencv-python 5.0, spicy_vki 1.1.2, and PaIRS-UniNa 0.2.12 on Python 3.13. The tested
+version of each package is in [docs/installation.md](docs/installation.md).
 
 ```bash
 # 1. VelociHub (Python 3.12 or later)
@@ -84,24 +99,16 @@ again.
 
 `python -m velocihub` also opens the interface.
 
-## Dependencies
-
-| Package | Needed for |
-|---|---|
-| numpy, scipy, matplotlib, contourpy, pillow, opencv-python, psutil | VelociHub (installed with it) |
-| Tkinter | The interface (included with Python on Windows and macOS; `python3-tk` on Linux) |
-| PaIRS-UniNa (Python 3.10-3.13, separate environment) | The PIV |
-| imutils, parse, h5py (`pip install velocihub[ptv]`) | The PTV with TracTrac (vendored) |
-| spicy_vki (`velocihub[regression]`) | The regression of the vector fields |
-| imageio-ffmpeg (`velocihub[video]`) | MP4 videos (GIF without it) |
-
-Tested on Windows 11 with Python 3.12-3.14, numpy 2.5, matplotlib 3.11, PaIRS-UniNa 0.2.12 (Python 3.13).
-
 ## Tests
 
 `pip install velocihub[test]`, then `python -m pytest` in the repository (about a minute). The tests make their own
 synthetic images of a jet (no data needed): the library, the Python API and batch, the interface (skipped without a
 display) and the PIV/PTV engines installed (PaIRS-UniNa, TracTrac; skipped otherwise).
+
+The benchmark on analytic flows (`tests/test_benchmark.py`, also **Tests > Benchmark** in the interface) writes its
+report to `benchmark_reports/report_<date>_<time>` in the repository (left out of git), one folder per run; its
+levels on particle images (pre-processing → PIV/PTV → post, about 20 minutes) run with `--benchmark-images`. See
+[docs/benchmark.md](docs/benchmark.md).
 
 ## Authors and licence
 

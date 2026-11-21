@@ -125,7 +125,7 @@ result = vh.batch.process_folder(
     n_modes=8,                                                     # POD modes removed (0: none)
     contrast=vh.ContrastSettings(filters=("capping",), stage="post", cap_n=10),
     masks="D:/Jet/FOV_3/masks.json",
-    regression={"method": "spicy", "settings": {"n_k": (4,)}},     # optional
+    regression={"method": "spicy", "settings": {"n_k": "auto"}},   # optional
     force=False)
 
 # Pre-processing only, with a project section (as the interface saves it)

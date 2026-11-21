@@ -202,7 +202,7 @@ Settings keys are listed in [processing.md](processing.md) (`windows`, `overlap`
 | Interface | API |
 |---|---|
 | Run step > Singular (F5) | `vectors = vh.run_piv(images, None, "PaIRS-UniNa", settings, output="D:/Jet/Run_30/PIV", masked=masked)` |
-| ... with SPICY regression | `vh.PIVRun(images, None, engine, settings, output, masked=masked, regression={"method": "spicy", "settings": {"n_k": (4,)}}).run()` |
+| ... with SPICY regression | `vh.PIVRun(images, None, engine, settings, output, masked=masked, regression={"method": "spicy", "settings": {"n_k": "auto"}}).run()` |
 | Run on the pair shown (F6) | `vh.PIVRun(images, engine=engine, settings=settings, output=tmp, pairs=[(k, k + 1)]).run()` |
 | Stop / continue | Ctrl+C in a script; running again with the same images and settings continues from the chunks saved |
 | Run in the background | `run = vh.PIVRun(...); process = run.start()` then `process.poll()` yields messages; `run.save()` writes the results |
