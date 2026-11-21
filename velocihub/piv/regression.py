@@ -17,7 +17,7 @@ import json
 import os
 import sys
 
-from .base import Parameter, PIVProcess, WorkerProcess
+from .base import AUTO, Parameter, PIVProcess, WorkerProcess
 
 # Regressions after the PIV software: key, name
 REGRESSIONS = (("none", "None"), ("spicy", "SPICY"))
@@ -25,12 +25,20 @@ REGRESSIONS = (("none", "None"), ("spicy", "SPICY"))
 SPICY_CHUNK = 20
 # Version of the chunks the worker saves: those of another version are discarded (part of the key of a regression)
 SPICY_FORMAT = 3
+# The points per RBF of "auto": for the vectors of a PIV and for the particles of a PTV. More points per RBF make
+# fewer, wider RBFs, so a smoother fit. The vectors of a PIV are already averaged over their windows: fewer points
+# follow the field more closely (3 does better than 4 on most flows of the benchmark, and keeps 82 % of a wave 5 grid
+# spacings long against 29 %). The links of a PTV each carry the noise of a single particle: fewer points average less
+# of it (3 is worse than 4 on most flows). See docs/processing.md.
+N_K_AUTO = {"vectors": (3,), "particles": (4,)}
 SPICY_PARAMETERS = (
     Parameter("basis", "RBF basis", "gauss", "choice",
               "Gaussian RBFs, or C4 RBFs (compact support: faster, a little less smooth).", ("gauss", "c4")),
-    Parameter("n_k", "Points per RBF (per level)", (4,), "ints",
-              ("Number of vectors each RBF should cover; one number per level of RBFs (e.g. 4 10: a fine and a "
-               "coarse level). Fewer points: more RBFs, a closer fit and a longer regression.")),
+    Parameter("n_k", "Points per RBF (per level)", AUTO, "ints",
+              ("Number of data (vectors, or particles after a PTV) each RBF should cover; one number per level of RBFs "
+               "(e.g. 4 10: a fine and a coarse level). Fewer points: more RBFs, a closer fit and a longer "
+               "regression. auto: 3 for the vectors of a PIV (already averaged over their windows), 4 for the "
+               "particles of a PTV (each with the noise of its link).")),
     Parameter("method", "Collocation", "clustering", "choice",
               ("Where the RBFs are placed: k-means clustering of the vectors, Halton points (semirandom) or a "
                "regular grid."), ("clustering", "semirandom", "regular")),
@@ -55,6 +63,11 @@ SPICY_PARAMETERS = (
     Parameter("outlier_neighbours", "Neighbours of the outlier test", 10, "int",
               help="PTV: the nearest links each link is compared with (within 3 grid spacings; with fewer than 4, "
                    "the link is kept)."),
+    Parameter("map_step", "Fit every n-th map", 1, "int",
+              help=("SPICY fits the maps 1, 1 + n, 1 + 2n... only, and the results hold those maps (with their "
+                    "pairs); 1: every map. For the statistics of a long time-resolved record: maps closer than about "
+                    "half the integral time repeat each other, so fitting every n-th map changes the statistics "
+                    "little and divides the time of SPICY by n. The PIV/PTV still computes every pair.")),
 )
 
 
@@ -73,7 +86,7 @@ def check_regression(regression):
         raise ValueError("SPICY: 0 < RBF radius min < RBF radius max")
     if not 0 < s["eps_l"] < 1:
         raise ValueError("SPICY: RBF value at the nearest RBF between 0 and 1")
-    if any(n < 1 for n in s["n_k"]):
+    if s["n_k"] != AUTO and any(n < 1 for n in s["n_k"]):
         raise ValueError("SPICY: points per RBF >= 1")
     if s["alpha_div"] < 0 or s["n_hb"] < 0:
         raise ValueError("SPICY: divergence penalty and harmonic basis functions >= 0")
@@ -83,7 +96,16 @@ def check_regression(regression):
         raise ValueError("SPICY: particle outlier test >= 0 (0: none)")
     if s["outlier_neighbours"] < 4:
         raise ValueError("SPICY: neighbours of the outlier test >= 4")
+    if s["map_step"] < 1:
+        raise ValueError("SPICY: fit every n-th map, n >= 1")
     return {"method": method, "settings": s}
+
+
+def points_per_rbf(settings, particles):
+    """The points per RBF of SPICY settings (checked) for the particles of a PTV or the vectors of a PIV: n_k, or
+    N_K_AUTO if it is "auto"."""
+    n_k = settings["n_k"]
+    return N_K_AUTO["particles" if particles else "vectors"] if n_k == AUTO else tuple(n_k)
 
 
 def describe_regression(regression):
@@ -124,7 +146,9 @@ def start_regression(work, regression, status, width, key, particles=False):
     ok, reason = spicy_available()
     if not ok:
         raise RuntimeError(reason)
-    job = {"work": work, "settings": regression["settings"], "status": status, "width": width,
+    # The worker gets the points per RBF themselves ("auto": those of the data, points_per_rbf)
+    settings = {**regression["settings"], "n_k": points_per_rbf(regression["settings"], particles)}
+    job = {"work": work, "settings": settings, "status": status, "width": width,
            "chunk": SPICY_CHUNK, "particles": bool(particles),
            "key": hashlib.sha1(json.dumps([key, regression_record(regression), bool(particles), SPICY_FORMAT],
                                           sort_keys=True, default=str).encode()).hexdigest()[:16]}

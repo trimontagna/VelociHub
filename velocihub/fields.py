@@ -165,6 +165,12 @@ class VectorFields:
     n = property(lambda self: self.U.shape[0])
     shape = property(lambda self: self.U.shape[1:])
 
+    @property
+    def map_step(self):
+        """The maps are every map_step-th pair computed (SPICY fitted every map_step-th map; 1: every pair): the map
+        k of a PTV is the pair of the frames k map_step and k map_step + 1 of its tracks."""
+        return int((self.settings or {}).get("regression_map_step") or 1)
+
     def describe(self):
         text = f"{self.n} maps of {self.shape[1]} x {self.shape[0]} vectors"
         if self.dt:

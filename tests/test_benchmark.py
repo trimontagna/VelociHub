@@ -3,9 +3,15 @@ themselves, the test measurements (particle images) and the menu Tests.
 
 A check that fails is a regression of VelociHub (or an improvement: then tighten its tolerance in cases.py). A known
 issue is expected to fail (xfail, with its reason); it fails the test when it starts passing: the issue is solved,
-make it a normal check. The benchmark runs once for the module (about a minute); its report is written with
+make it a normal check. The benchmark runs once for the module (about a minute); its report is written in
+benchmark_reports of the repository (a folder per run, named by its date and time), or in a folder of your choice:
 
     pytest tests/test_benchmark.py --benchmark-report <folder>
+
+The levels on particle images (pre-processing -> processing, and the full chain) run the PIV/PTV engines for about 20
+minutes: their checks are skipped unless
+
+    pytest tests/test_benchmark.py --benchmark-images
 """
 
 import json
@@ -25,14 +31,19 @@ CHECKS = ([(key, i, check) for key, case in CASES.items() for i, check in enumer
           + [("background", i, check) for i, check in enumerate(BACKGROUND_CHECKS)])
 
 
+IMAGE_LEVELS = ("images", "chain")
+
+
 @pytest.fixture(scope="module")
 def benchmark(request):
     from velocihub.benchmark import report, run_benchmark
 
-    result = run_benchmark()
-    folder = request.config.getoption("--benchmark-report")
-    if folder:
-        print(f"\nBenchmark report: {report.write_report(result, folder)}")
+    levels = ("preprocessing", "post", "processing")
+    if request.config.getoption("--benchmark-images"):
+        levels += IMAGE_LEVELS
+    result = run_benchmark(levels=levels)
+    folder = request.config.getoption("--benchmark-report") or report.default_folder()
+    print(f"\nBenchmark report: {report.write_report(result, folder)}")
     out = {r.case.key: r for r in result.cases}
     out["background"] = result.extra["background"]
     return out
@@ -125,12 +136,14 @@ def test_test_workspace(tmp_path):
 
 @pytest.mark.parametrize("key, index, check", CHECKS,
                          ids=[f"{k}-{c.level}-{c.scenario}-{c.method}-{c.metric}-{i}" for k, i, c in CHECKS])
-def test_check(benchmark, key, index, check):
-    result = benchmark[key]
+def test_check(request, key, index, check):
+    if check.level in IMAGE_LEVELS and not request.config.getoption("--benchmark-images"):
+        pytest.skip("a level on particle images: pytest --benchmark-images")
+    result = request.getfixturevalue("benchmark")[key]
     for scenario, data in getattr(result, "data", {}).items():
         if hasattr(data, "errors"):
             assert not data.errors, f"{scenario}: {data.errors}"
-    r = result.checks[index] if key == "background" else next(c for c in result.checks if c.check is check)
+    r = next(c for c in result.checks if c.check is check)
     assert r.check is check
     message = f"{check.label}: {r.value} (tolerance {check.op} {r.limit})"
     if check.known_issue:
@@ -140,15 +153,18 @@ def test_check(benchmark, key, index, check):
     assert r.status == "pass", message
 
 
-def test_menu_runs_a_case(gui, monkeypatch):
+def test_menu_runs_a_case(gui, monkeypatch, tmp_path):
     """Tests > Benchmark > a case: the benchmark runs in its own process (python -m velocihub.benchmark), its
-    progress in the status log, and its report is opened at the end (and remembered: Open the last report)."""
+    progress in its window (each level done) and in the status log, and its report is opened at the end (and
+    remembered: Open the last report)."""
     import webbrowser
 
     from velocihub import prefs
+    from velocihub.benchmark import report
 
     opened = []
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(report, "reports_folder", lambda: str(tmp_path))  # Not in the folder of the repository
     menu = gui.app.menus["Tests"]
     labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
     assert labels[0] == "Benchmark" and "Test workspace" in labels and "Open the last report" in labels
@@ -158,7 +174,50 @@ def test_menu_runs_a_case(gui, monkeypatch):
         gui.root.update()
         time.sleep(0.1)
     assert opened and os.path.isfile(opened[0]), gui.app.status_listbox.get(0, 5)
+    assert opened[0].startswith(str(tmp_path))
     assert prefs.getpref("benchmark_last_report") == opened[0]
+    window = gui.app.benchmark.window
+    assert set(window.rows) == {"post", "processing"}
+    assert all(state["text"] == "done" for _, state in window.rows.values())
+    assert window.report == opened[0] and str(window.report_button["state"]) == "normal"
+    assert window.log.size() > 3
     status = gui.app.status_listbox.get(0, "end")
     assert any("checks passed" in line for line in status) and any("SPICY 1/" in line for line in status)
     assert not gui.boxes
+
+
+def test_recording_measures(tmp_path):
+    """The comparison on a recording (recording.py): the spatial noise of a field (0 for a smooth one, a spike at its
+    own distance), and the masks and PIV settings read from the project of the recording, or from its masks.json."""
+    from velocihub.benchmark.image_level import PIV_SETTINGS
+    from velocihub.benchmark.recording import neighbour_residual, recording_images, recording_setup
+
+    y, x = np.mgrid[0:6, 0:8].astype(float)
+    U, V = 2 + 0.1 * x, 0.05 * y
+    flowing = np.ones(U.shape, bool)
+    r = neighbour_residual(U[None], V[None], flowing)[0]
+    assert np.isnan(r[0]).all() and np.isnan(r[:, -1]).all()  # The edges: not all the neighbours
+    assert np.nanmax(r) < 1e-12  # A linear field: its neighbours' median is itself
+    U2, V2 = np.full(U.shape, 2.0), np.zeros(U.shape)
+    U2[3, 4] += 1.5
+    r = neighbour_residual(U2[None], V2[None], flowing)[0]
+    assert r[3, 4] == pytest.approx(1.5) and np.nanmax(np.delete(r.ravel(), 3 * 8 + 4)) < 1e-12
+    flowing[2, 2] = False
+    assert np.isnan(neighbour_residual(U[None], V[None], flowing)[0, 1:4, 1:4]).all()  # Next to a masked cell
+    # The setup: masks.json, then the project file (its enabled masks and its PIV windows)
+    for k in range(3):
+        (tmp_path / f"img_{k}.bmp").write_bytes(b"")
+    (tmp_path / "notes.txt").write_text("")
+    assert [os.path.basename(p) for p in recording_images(str(tmp_path), 2)] == ["img_0.bmp", "img_1.bmp"]
+    assert recording_setup(str(tmp_path)) == ([], PIV_SETTINGS)
+    with open(tmp_path / "masks.json", "w") as f:
+        json.dump({"masks": [{"name": "a", "enabled": True, "points": [[0, 0], [5, 0], [5, 5]]}]}, f)
+    assert recording_setup(str(tmp_path))[0] == [[[0, 0], [5, 0], [5, 5]]]
+    from velocihub.project import write_project
+    write_project(str(tmp_path / "VelociHub_project.json"), {
+        "preprocessing": {"masks": [{"name": "b", "enabled": True, "points": [[1, 1], [2, 1], [2, 2]]},
+                                    {"name": "c", "enabled": False, "points": [[0, 0], [1, 0], [1, 1]]}]},
+        "piv": {"settings": {"engine": "PaIRS-UniNa", "engine_settings": {"pairs": {"windows": "128 64 32",
+                                                                                     "overlap": "75"}}}}})
+    masks, settings = recording_setup(str(tmp_path))
+    assert masks == [[[1, 1], [2, 1], [2, 2]]] and settings == {"windows": (128, 64, 32), "overlap": 75.0}

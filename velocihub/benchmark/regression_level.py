@@ -96,6 +96,8 @@ class CaseResult:
     post: dict = field(default_factory=dict)
     metrics: dict = field(default_factory=dict)
     checks: list = field(default_factory=list)
+    # The runs of the PIV/PTV on its images (image_level.py): {style: {run folder: record}}
+    runs: dict = field(default_factory=dict)
 
     def failures(self):
         return [c for c in self.checks if c.status in ("fail", "fixed", "missing")]
@@ -103,12 +105,15 @@ class CaseResult:
 
 @dataclass
 class BackgroundResult:
-    """The background removal test (images.run_background): its data, metrics ({scenario: {"pod": {metric}}}) and
-    checks."""
+    """The background removal test (images.run_background): its data (None if its pre-processing level didn't
+    run), metrics ({scenario: {"pod": {metric}}}) and checks; the metrics of its images through the PIV/PTV and the
+    post-processing (levels: {level: {scenario: {method: {metric}}}}, image_level.py) and their runs."""
 
     data: dict
     metrics: dict
     checks: list
+    levels: dict = field(default_factory=dict)
+    runs: dict = field(default_factory=dict)
 
     def failures(self):
         return [c for c in self.checks if c.status in ("fail", "fixed", "missing")]
@@ -121,7 +126,7 @@ class BenchmarkResult:
     cases: list
     environment: dict
     seconds: float
-    levels: tuple = ("preprocessing", "post", "processing")
+    levels: tuple = ("preprocessing", "post", "processing", "images", "chain")
     extra: dict = field(default_factory=dict)
 
     def all_checks(self):
@@ -584,11 +589,14 @@ def run_processing(cases, scenarios, work, report, parallel=PARALLEL):
 
 
 def run_benchmark(cases=None, scenarios=None, work=None, report=None, parallel=PARALLEL, keep=False,
-                  levels=("preprocessing", "post", "processing")):
+                  levels=("preprocessing", "post", "processing", "images", "chain"), progress=None):
     """Run the cases (keys of CASES, all by default) at the levels (cases.LEVELS: the pre-processing level is the
-    background removal test, not a case) in their scenarios (keys of SCENARIOS for the processing level, all by
-    default): report(text) receives the progress. work: the folder of the data (a temporary one by default, removed
-    at the end unless keep). Returns a BenchmarkResult."""
+    background removal test, not a case; the levels images and chain run the PIV/PTV on particle images,
+    image_level.py, with the images of the background removal test when all the cases run) in their scenarios (keys
+    of SCENARIOS for the processing level, all by default): report(text) receives the progress. work: the folder of
+    the data (a temporary one by default, removed at the end unless keep). progress(level, done, total): the
+    progress of each level (0 then 1 of 1 at its start and end; the runs of the PIV/PTV of the image levels counted).
+    Returns a BenchmarkResult."""
     import shutil
     import tempfile
 
@@ -598,26 +606,47 @@ def run_benchmark(cases=None, scenarios=None, work=None, report=None, parallel=P
 
     t0 = time.time()
     report = report or (lambda text: None)
+    progress = progress or (lambda level, done, total: None)
     results = [CaseResult(CASES[k], CASES[k].flow()) for k in (cases if cases is not None else list(CASES))]
     own = work is None
     work = work or tempfile.mkdtemp(prefix="velocihub_benchmark_")
     extra = {}
+    # The background removal test: its pre-processing level, and its images through the PIV/PTV and the post
+    bg_data, bg_levels, bg_runs = None, {}, {}
     try:
         if "preprocessing" in levels:
-            data = run_background(os.path.join(work, "_background"), BACKGROUND_MODES, report, keep=True)
-            metrics = {f"modes_{n}": {"pod": m} for n, m in data["modes"].items()}
-            checks = [evaluate_check(c, metrics) for c in BACKGROUND_CHECKS]
-            extra["background"] = BackgroundResult(data, metrics, checks)
-            failed = [c for c in checks if c.status in ("fail", "fixed", "missing")]
-            report(f"Background removal: {len(checks) - len(failed)}/{len(checks)} checks as expected")
+            progress("preprocessing", 0, 1)
+            bg_data = run_background(os.path.join(work, "_background"), BACKGROUND_MODES, report, keep=True)
+            bg_levels["preprocessing"] = {f"modes_{n}": {"pod": m} for n, m in bg_data["modes"].items()}
+            progress("preprocessing", 1, 1)
         if "post" in levels:
+            progress("post", 0, 1)
             metrics, kept = run_post([r.case for r in results], work=os.path.join(work, "_post"), report=report,
                                      keep=True)
             for r in results:
                 r.metrics["post"] = metrics[r.case.key]
                 r.post = kept[r.case.key]
+            progress("post", 1, 1)
         if "processing" in levels:
+            progress("processing", 0, 1)
             run_processing(results, [SCENARIOS[k] for k in (scenarios or list(SCENARIOS))], work, report, parallel)
+            progress("processing", 1, 1)
+        if {"images", "chain"} & set(levels):
+            from .image_level import run_images
+            bg = run_images(results, levels, work, report, parallel, background=cases is None, progress=progress)
+            if bg is not None:
+                bg_levels.update(bg["metrics"])
+                bg_runs = bg["runs"]
+            for level in ("images", "chain"):
+                if level in levels:
+                    progress(level, 1, 1)
+        if bg_levels:
+            checks = [evaluate_check(c, bg_levels[c.level]) for c in BACKGROUND_CHECKS
+                      if c.level in bg_levels and c.scenario in bg_levels[c.level]]
+            extra["background"] = BackgroundResult(bg_data, bg_levels.get("preprocessing", {}), checks, bg_levels,
+                                                   bg_runs)
+            failed = [c for c in checks if c.status in ("fail", "fixed", "missing")]
+            report(f"Background removal: {len(checks) - len(failed)}/{len(checks)} checks as expected")
         for r in results:
             r.checks = [evaluate_check(c, r.metrics.get(c.level, {})) for c in r.case.checks
                         if c.level in r.metrics and c.scenario in r.metrics[c.level]]

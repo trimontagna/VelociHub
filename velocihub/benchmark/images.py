@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
@@ -45,6 +46,41 @@ BACKGROUND_CASE = "background_removal"
 
 def frames_of(flow):
     return FRAMES if flow.steady else TURBULENCE_FRAMES
+
+
+@dataclass(frozen=True)
+class ImageStyle:
+    """How the particle images are rendered: the peak intensities of the particles (range, grey levels), their image
+    radius (Gaussian sigma, px: a range draws one per particle), the camera noise and the background (grey levels),
+    the fluctuation of the laser energy between the frames, the depth of the profile of the light sheet across the
+    height of the images (0: uniform; the particles at the top and bottom edges get 1 - illumination of the light),
+    and the stationary reflections (reflections_of)."""
+
+    key: str
+    name: str
+    description: str
+    peak: tuple = PEAK
+    sigma: tuple = (SIGMA_P, SIGMA_P)
+    camera_noise: float = CAMERA_NOISE
+    background: float = BACKGROUND
+    laser_jitter: float = LASER_JITTER
+    illumination: float = 0.0
+    reflections: bool = False
+
+
+# The images of the test measurements, and a harder rendering of the same flows (the comparison of the
+# pre-processing methods: dim particles of varied brightness and size, more camera noise, a brighter background, an
+# uneven light sheet and stationary reflections)
+CLEAN = ImageStyle("clean", "Test images", "The images of the test measurements: bright particles (peak 110 to 210 "
+                                           "grey levels, about 2.5 px across), camera noise of 2 grey levels, a dark "
+                                           "background, a uniform light sheet, no reflection.")
+HARD = ImageStyle("hard", "Hard images", "The same flows rendered harder: dim particles of varied brightness (peak 20 "
+                                         "to 90 grey levels) and size (1.5 to 3.5 px across), camera noise of 6 grey "
+                                         "levels, a background of 30, a light sheet dimmer by 60 % at the top and "
+                                         "bottom edges, ±10 % laser energy, and stationary reflections (a streak, a "
+                                         "wall line, a ring, a glare spot; the rim of a body).",
+                  peak=(20.0, 90.0), sigma=(0.6, 1.4), camera_noise=6.0, background=30.0, laser_jitter=0.1,
+                  illumination=0.6, reflections=True)
 
 
 ################################################################################
@@ -88,20 +124,22 @@ def advect(flow, p, t, rng):
     return p
 
 
-def draw_particles(p, peaks):
-    """The particles (X, Y up) as Gaussian spots on a black image (float)."""
+def draw_particles(p, peaks, sigma=SIGMA_P):
+    """The particles (X, Y up) as Gaussian spots on a black image (float); sigma: their image radius (px, one or
+    one per particle)."""
     image = np.zeros((HEIGHT, WIDTH))
     x, y = p[:, 0], HEIGHT - p[:, 1]  # Image coordinates, pixel centres at j + 1/2
-    r = int(np.ceil(3 * SIGMA_P))
+    r = int(np.ceil(3 * np.max(sigma)))
     ok = (x > -r) & (x < WIDTH + r) & (y > -r) & (y < HEIGHT + r)
     x, y, peaks = x[ok], y[ok], peaks[ok]
+    sigma = np.broadcast_to(np.asarray(sigma, np.float64), ok.shape)[ok]
     cx, cy = np.floor(x).astype(int), np.floor(y).astype(int)
     for dj in range(-r, r + 1):
         for di in range(-r, r + 1):
             col, row = cx + dj, cy + di
             inside = (col >= 0) & (col < WIDTH) & (row >= 0) & (row < HEIGHT)
             d2 = (col + 0.5 - x) ** 2 + (row + 0.5 - y) ** 2
-            np.add.at(image, (row[inside], col[inside]), (peaks * np.exp(-d2 / (2 * SIGMA_P**2)))[inside])
+            np.add.at(image, (row[inside], col[inside]), (peaks * np.exp(-d2 / (2 * sigma**2)))[inside])
     return image
 
 
@@ -168,32 +206,39 @@ def mask_polygons(flow):
 # Images
 
 
-def render(flow, folder, frames=None, seed=0, reflections=False, prefix="img"):
-    """The images of a flow in folder (prefix_0000.tif...): frames images (frames_of by default). Returns their
-    paths and the parts of each image ({"particles": [...], "energy": [...], "positions": the particles of each
-    image (X, Y up), "peaks": their peak intensities (before the laser energy), "features": the stationary features
-    (float image, before the laser energy)})."""
+def render(flow, folder, frames=None, seed=0, reflections=False, prefix="img", style=CLEAN):
+    """The images of a flow in folder (prefix_0000.tif...): frames images (frames_of by default), rendered as style
+    (ImageStyle; reflections: with the stationary reflections whatever the style). Returns their paths and the parts
+    of each image ({"particles": [...], "energy": [...], "positions": the particles of each image (X, Y up), "peaks":
+    their peak intensities (before the laser energy), "features": the stationary features (float image, before the
+    laser energy)})."""
     frames = frames or frames_of(flow)
     os.makedirs(folder, exist_ok=True)
     rng = np.random.default_rng(seed)
     n = int(round(SEEDING * (WIDTH + 2 * MARGIN) * (HEIGHT + 2 * MARGIN)))
     p = _seed(flow, n, rng)
-    peaks = rng.uniform(*PEAK, n)
+    peaks = rng.uniform(*style.peak, n)
+    # The sizes of the particles drawn apart (the images of the clean style unchanged by them)
+    sigma = (np.random.default_rng(seed + 7919).uniform(*style.sigma, n) if style.sigma[1] > style.sigma[0]
+             else style.sigma[0])
     body = body_image(flow)
     yy = np.mgrid[0:HEIGHT, 0:WIDTH][0]
-    background = BACKGROUND + 6 * (1 - yy / HEIGHT)
+    background = style.background + 6 * (1 - yy / HEIGHT)
+    light = 1 - style.illumination * (2 * (yy + 0.5) / HEIGHT - 1) ** 2  # The profile of the light sheet
     features = np.zeros((HEIGHT, WIDTH))
-    if reflections:
+    if reflections or style.reflections:
         for _, image, _ in reflections_of(flow).values():
             features += image
     paths, parts = [], {"particles": [], "energy": [], "positions": [], "peaks": peaks, "features": features}
     for k in range(frames):
         if k:
             p = advect(flow, p, k - 1, rng)
-        energy = 1 + LASER_JITTER * rng.standard_normal()
-        particles = draw_particles(p, peaks) * (1 - body)
+        energy = 1 + style.laser_jitter * rng.standard_normal()
+        particles = draw_particles(p, peaks, sigma) * (1 - body)
+        if style.illumination:
+            particles = particles * light
         image = background * (1 - body) + 25 * body + energy * (particles + features)
-        image += rng.normal(0, CAMERA_NOISE, image.shape)
+        image += rng.normal(0, style.camera_noise, image.shape)
         path = os.path.join(folder, f"{prefix}_{k:04d}.tif")
         Image.fromarray(np.clip(np.rint(image), 0, 255).astype(np.uint8)).save(path)
         paths.append(path)

@@ -1073,8 +1073,9 @@ class PIVPage(Page):
                 note = "no particle tracked"
             elif source == "results":
                 T = self.pair_tracks(fields.tracks) if fields.tracks else None
-                particles = pair_particles(T, k) if T is not None else None
-                note = (f"no particle tracked at frames {k + 1} and {k + 2}" if T is not None
+                frame = k * fields.map_step
+                particles = pair_particles(T, frame) if T is not None else None
+                note = (f"no particle tracked at frames {frame + 1} and {frame + 2}" if T is not None
                         else "tracks.npz not found")
             if particles is not None:
                 return {**data, **particles, "kind": "particles"}
@@ -1156,8 +1157,11 @@ class PIVPage(Page):
             return self.live[1], 0, "live"
         if self.test_result is not None and self.test_result[0] == self.index:
             return self.test_result[1], 0, "test"
-        if self.results is not None and self.index < self.results.n:
-            return self.results, self.index, "results"
+        if self.results is not None:
+            # SPICY fitted every n-th map: the results hold the pairs 1, 1 + n... only
+            step = self.results.map_step
+            if self.index % step == 0 and self.index // step < self.results.n:
+                return self.results, self.index // step, "results"
         return None, None, None
 
     def window_sizes(self):

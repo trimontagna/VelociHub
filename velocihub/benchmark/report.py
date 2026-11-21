@@ -17,6 +17,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
 from .cases import BACKGROUND_SCENARIOS, LEVELS, METHODS, POST_SCENARIOS, SCENARIOS
+from .image_level import CHAIN_METHODS, CHAIN_SCENARIOS, HARD_FLOWS, IMAGE_METHODS, IMAGE_SCENARIOS, RECIPES
 from .measurement import MM_PER_PX, MS_PER_PX, PER_S
 
 # Colours (the light chart surface, the ink, the categorical series, the status)
@@ -29,7 +30,7 @@ DIVERGING = LinearSegmentedColormap.from_list("vh_diverging", ["#104281", "#3987
                                                                "#f2a39f", "#e34948", "#8f1d1c"])
 METHOD_NAMES = dict(METHODS)
 SHORT_NAMES = {"exact": "Exact", "spicy_ptv": "SPICY (PTV)", "binned": "Binned (PTV)", "spicy_piv": "SPICY (PIV)",
-               "post": "VelociHub", "pod": "POD"}
+               "post": "VelociHub", "pod": "POD", **dict(CHAIN_METHODS)}
 STATUS = {"pass": ("✓", "Pass"), "fail": ("✗", "Fail"), "known": ("●", "Known issue"),
           "fixed": ("★", "Known issue now passing"), "missing": ("?", "Not computed")}
 BACKGROUND_PAGE = "background.html"
@@ -68,6 +69,21 @@ METRICS = {
     "post_vs_fields": ("Post-processed mean − mean of the fields read (px)", 1, None),
     "post_mean_error": ("Post-processed mean: RMS error vs the exact mean (px)", 1, None),
     "post_vort_error": ("Vorticity of the post-processed mean: RMS error (10⁻³/pair)", 1e3, None),
+    # Images (pre-processing -> processing) and the chain
+    "outliers": ("Outliers: |Δd| beyond 0.5 px (%)", 1, 2),
+    "valid": ("Valid vectors of the PIV (%)", 1, 1),
+    "peak_ratio": ("Correlation peak ratio, median", 1, 2),
+    "links_per_pair": ("Particles linked per pair, median", 1, 0),
+    "wrong_links": ("Wrong links: |Δd| beyond 1 px (%)", 1, 2),
+    "link_rms": ("RMS error of the right links (px)", 1, None),
+    "track_length_median": ("Track length, median (frames)", 1, 0),
+    "track_length_mean": ("Track length, mean (frames)", 1, 1),
+    "detected_per_frame": ("Particles detected per frame, median", 1, 0),
+    "yield": ("Particles tracked / detected (%)", 1, 1),
+    "field_rms": ("RMS error of the fields |Δd| (px)", 1, None),
+    "spatial_noise": ("Spatial noise: median distance of a vector from the median of its neighbours (px)", 1, None),
+    "suspect_links": ("Suspect links: failing the median test against their neighbours (%)", 1, 2),
+    "displacement": ("Displacement |d|, median (px)", 1, None),
     # Post-processing level
     "positions_error": ("Positions: largest error (px)", 1, None),
     "units_error": ("Velocities / camera − displacements: largest (px)", 1, None),
@@ -125,7 +141,9 @@ METRICS = {
 }
 # The metrics that differ between the levels (the same key): label by level
 LEVEL_LABELS = {("post", "rms"): "RMS of the fluctuations, median (px)",
-                ("processing", "rms"): "RMS error of the displacement |Δd| (px)"}
+                ("processing", "rms"): "RMS error of the displacement |Δd| (px)",
+                ("images", "rms"): "RMS error of the displacement |Δd| (px)",
+                ("chain", "rms"): "RMS of the fluctuations, median (px)"}
 
 
 def metric_label(key, level=None):
@@ -162,8 +180,11 @@ def fmt(key, value):
 
 
 def scenario_name(level, key):
-    table = {"post": POST_SCENARIOS, "processing": SCENARIOS, "preprocessing": BACKGROUND_SCENARIOS}.get(level, {})
-    return table[key].name if key in table else key
+    table = {"post": POST_SCENARIOS, "processing": SCENARIOS, "preprocessing": BACKGROUND_SCENARIOS,
+             "images": IMAGE_SCENARIOS, "chain": CHAIN_SCENARIOS}.get(level, {})
+    if key not in table:
+        return key
+    return table[key] if isinstance(table[key], str) else table[key].name
 
 
 def fmt_limit(check, limit):
@@ -752,6 +773,127 @@ def summary_chart(result, folder):
     return _save(fig, folder, "summary_rms.png")
 
 
+# The columns of the comparison of the recipes: (metric, lower is better), and their short headings
+RECIPE_COLUMNS = {"piv": (("rms", True), ("rms_interior", True), ("outliers", True), ("valid", False),
+                          ("peak_ratio", False)),
+                  "ptv": (("links_per_pair", False), ("wrong_links", True), ("link_rms", True),
+                          ("track_length_median", False), ("yield", False), ("rms", True), ("coverage", False))}
+RECIPE_HEADS = {"rms": "RMS error (px)", "rms_interior": "— interior (px)", "outliers": "Outliers (%)",
+                "valid": "Valid (%)", "peak_ratio": "Peak ratio", "links_per_pair": "Links per pair",
+                "wrong_links": "Wrong links (%)", "link_rms": "Link error (px)",
+                "track_length_median": "Track length (frames)", "yield": "Tracked (%)", "coverage": "Cells (%)",
+                "spatial_noise": "Spatial noise (px)", "suspect_links": "Suspect links (%)",
+                "track_length_mean": "Mean track (frames)", "detected_per_frame": "Detected per frame",
+                "displacement": "Median |d| (px)"}
+RECIPE_NOTES = {"piv": "RMS error of the PIV vectors against the exact field, all the flow and away from the edges "
+                       "and masks; outliers: vectors more than 0.5 px off; valid: the vectors the PIV kept (the "
+                       "others replaced); the median correlation peak ratio (S/N).",
+                "ptv": "The particles linked in each pair (median), the links more than 1 px off (wrong), the RMS "
+                       "error of the others, the median length of the tracks, the particles tracked of those "
+                       "detected, then the field binned on the grid: its RMS error and the cells with a value."}
+
+
+def recipes_of(metrics, style):
+    """The recipes run on the images of a style, in the order of RECIPES."""
+    return [k for k in RECIPES if f"{style}_{k}" in metrics]
+
+
+def recipe_table(metrics, style, method, columns=None):
+    """The recipes of the images of a style (rows) for a method: the metrics of columns ((metric, lower is better),
+    RECIPE_COLUMNS of the method by default), the best of each column in bold."""
+    recipes = [k for k in recipes_of(metrics, style) if method in metrics[f"{style}_{k}"]]
+    if not recipes:
+        return "<p class=meta>No result.</p>"
+    columns = [(k, low) for k, low in (columns or RECIPE_COLUMNS[method])
+               if any(metrics[f"{style}_{r}"][method].get(k) is not None for r in recipes)]
+    best = {}
+    for k, low in columns:
+        if low is None:  # Shown, not ranked
+            continue
+        vals = [metrics[f"{style}_{r}"][method].get(k) for r in recipes]
+        vals = [v for v in vals if v is not None and np.isfinite(v)]
+        if len(vals) > 1:
+            best[k] = min(vals) if low else max(vals)
+    rows = []
+    for r in recipes:
+        m = metrics[f"{style}_{r}"][method]
+        cells = []
+        for k, _ in columns:
+            text = fmt(k, m.get(k))
+            cells.append(f'<td class="num">{"<strong>" + text + "</strong>" if k in best and m.get(k) == best[k] else text}'
+                         "</td>")
+        rows.append(f'<tr><td title="{esc(RECIPES[r].description)}">{esc(RECIPES[r].name)}</td>{"".join(cells)}</tr>')
+    head = "".join(f'<th class="num" title="{esc(metric_label(k, "images"))}">{esc(RECIPE_HEADS[k])}</th>'
+                   for k, _ in columns)
+    return (f'<div class="scroll"><table><thead><tr><th>Pre-processing</th>{head}</tr></thead><tbody>'
+            + "".join(rows) + "</tbody></table></div>")
+
+
+def recipe_figure(metrics, style, folder, name):
+    """The recipes of the images of a style compared: the RMS error of the PIV, the particles linked per pair of the
+    PTV and its wrong links (horizontal bars, the best of each darker)."""
+    recipes = recipes_of(metrics, style)
+    if not recipes:
+        return None
+    fig = _figure(8.6, 0.32 * len(recipes) + 1.1)
+    axes = fig.subplots(1, 3, sharey=True)
+    y = np.arange(len(recipes))[::-1]
+    for ax, (method, key, low, title, colour) in zip(axes, (
+            ("piv", "rms", True, "PIV: RMS error |Δd| (px)", SERIES["spicy_piv"]),
+            ("ptv", "links_per_pair", False, "PTV: particles linked per pair", SERIES["binned"]),
+            ("ptv", "wrong_links", True, "PTV: wrong links (%)", SERIES["binned"]))):
+        _style(ax)
+        ax.grid(True, axis="x", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        vals = np.array([metrics[f"{style}_{r}"].get(method, {}).get(key, np.nan) for r in recipes], float)
+        finite = vals[np.isfinite(vals)]
+        target = (finite.min() if low else finite.max()) if finite.size else None
+        ax.barh(y, vals, 0.62, color=[colour if v == target else colour + "80" for v in vals])
+        for yi, v in zip(y, vals):
+            if np.isfinite(v):
+                ax.text(v, yi, " " + fmt(key, v), va="center", ha="left", fontsize=7, color=INK_2)
+        ax.set_xlabel(title, fontsize=8)
+        ax.margins(x=0.3)
+    axes[0].set_yticks(y, [RECIPES[r].name for r in recipes], fontsize=8)
+    return _save(fig, folder, name)
+
+
+def recipes_summary_figure(result, folder):
+    """The recipes on the hard images of each flow, relative to no pre-processing: the RMS error of the PIV and the
+    wrong links of the PTV (grouped bars, a colour per flow; log scale: below 1, better than without)."""
+    from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+
+    cases = [r for r in result.cases if recipes_of(r.metrics.get("images", {}), "hard")]
+    if not cases:
+        return None
+    recipes = [k for k in RECIPES if k != "none"]
+    fig = _figure(8.6, 4.8)
+    axes = fig.subplots(2, 1, sharex=True)
+    width = 0.8 / len(cases)
+    x = np.arange(len(recipes))
+    for ax, (method, key, label) in zip(axes, (("piv", "rms", "PIV: RMS error\n÷ without"),
+                                               ("ptv", "wrong_links", "PTV: wrong links\n÷ without"))):
+        _style(ax)
+        ax.grid(True, axis="y", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for i, r in enumerate(cases):
+            m = r.metrics["images"]
+            base = m.get("hard_none", {}).get(method, {}).get(key)
+            vals = [m.get(f"hard_{k}", {}).get(method, {}).get(key, np.nan) / base if base else np.nan
+                    for k in recipes]
+            ax.bar(x + (i - (len(cases) - 1) / 2) * width, vals, width * 0.92, color=THREE[i % len(THREE)],
+                   label=r.flow.name)
+        ax.axhline(1, color=INK_2, linewidth=1, linestyle="--")
+        ax.set_yscale("log")
+        ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_ylabel(label, fontsize=8)
+    axes[0].legend(fontsize=7, frameon=False, ncol=len(cases), loc="upper left", bbox_to_anchor=(0, 1.18))
+    axes[1].set_xticks(x, [RECIPES[k].name.replace(" + ", "\n+ ") for k in recipes], fontsize=7)
+    return _save(fig, folder, "recipes_hard.png")
+
+
 def background_figures(bg, folder):
     """The mean images (raw, and with 1 and 2 modes removed) and what each removal leaves of each feature."""
     data = bg.data
@@ -1020,7 +1162,7 @@ def case_page(result, r, folder, previous):
         f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in params.items()) + "</dl>")
     parts.append(f"<p class=meta>All checks: {counts_text(r.checks)}</p>")
     figs = os.path.join(folder, "figures")
-    for level in ("post", "processing"):
+    for level in ("post", "processing", "images", "chain"):
         if level not in r.metrics:
             continue
         name, description = LEVELS[level]
@@ -1033,7 +1175,11 @@ def case_page(result, r, folder, previous):
         parts.append(f"<h3>Checks</h3><p class=meta>{counts_text(checks)}</p>")
         parts.append(checks_table(case.key, checks, previous))
         parts.append("<h3>Metrics</h3>")
-        if level == "post":
+        if level == "images":
+            parts.append(images_section(r.metrics[level], r.runs, figs, case.key))
+        elif level == "chain":
+            parts.append(chain_section(r.metrics[level], r.runs))
+        elif level == "post":
             parts.append("<p class=meta>In px and pairs (VelociHub's physical values divided by the camera's). "
                          "Medians over the grid points of the flow; the expected values: the exact mean, the noise, "
                          "the statistics of the modes of the turbulence.</p>")
@@ -1049,6 +1195,59 @@ def case_page(result, r, folder, previous):
                              + table_of([(SHORT_NAMES[m], ms[m]) for m, _ in METHODS if m in ms], None, level))
             parts.append(figures_html(processing_figures(r, figs)))
     return page(f"{flow.name} — VelociHub benchmark", "".join(parts), navigation(result, case.key))
+
+
+def run_errors(runs, chain=False):
+    """The runs of the PIV/PTV on images that failed (records of image_level.run_measurement), as lines."""
+    out = []
+    for style, records in runs.items():
+        for folder, rec in records.items():
+            if rec.get("file") is None and bool(rec.get("spicy")) <= chain:
+                out.append(f'<p>{badge("fail")} {esc(style)} images, {esc(folder)}: {esc(rec.get("status"))} '
+                           f'{esc(rec.get("message") or "")}</p>')
+    return "".join(out)
+
+
+def run_times(runs):
+    """The time of the runs (s), by style of images."""
+    return {style: sum(rec.get("seconds") or 0 for rec in records.values()) for style, records in runs.items()}
+
+
+def images_section(metrics, runs, figs, key):
+    """The level images of a case (or of the background test): the recipes on its test images, then compared on
+    its hard images."""
+    from .images import CLEAN, HARD
+
+    parts = [run_errors({s: rr for s, rr in runs.items()})]
+    for style in (CLEAN, HARD):
+        if not recipes_of(metrics, style.key):
+            continue
+        title = ("Test images" if style is CLEAN else "Hard images: the pre-processing compared")
+        parts.append(f"<h3>{esc(title)}</h3><p class=meta>{esc(style.description)} Pairs: consecutive frames. "
+                     "Hover a recipe for what it does; the best value of each column in bold.</p>")
+        for method, name in IMAGE_METHODS:
+            parts.append(f"<p><strong>{esc(name)}.</strong> <span class=note>{esc(RECIPE_NOTES[method])}</span></p>"
+                         + recipe_table(metrics, style.key, method))
+        if style is HARD:
+            file = recipe_figure(metrics, style.key, figs, f"{key}_recipes_{style.key}.png")
+            if file:
+                parts.append(figures_html([("The pre-processing on the hard images", "RMS error of the PIV, "
+                                            "particles linked per pair and wrong links of the PTV for each recipe; "
+                                            "the best of each darker.",
+                                            file)]))
+    return "".join(parts)
+
+
+def chain_section(metrics, runs):
+    """The level chain of a case (or of the background test): each scenario, its methods post-processed."""
+    parts = [run_errors(runs, chain=True),
+             "<p class=meta>The results of the PIV/PTV of the images post-processed with the default recipe, in px "
+             "and pairs. No noise is added: the errors of the measurement are the fluctuations (RMS), so the "
+             "ratios of the turbulence include them. The field error is that of the instantaneous fields.</p>"]
+    for s, ms in metrics.items():
+        parts.append(f"<h3>{esc(scenario_name('chain', s))}</h3>"
+                     + table_of([(SHORT_NAMES[m], ms[m]) for m, _ in CHAIN_METHODS if m in ms], None, "chain"))
+    return "".join(parts)
 
 
 BACKGROUND_METHOD = """<h3>How what is left is measured</h3>
@@ -1105,12 +1304,20 @@ def background_page(result, folder, previous):
     name, description = LEVELS["preprocessing"]
     parts = [f"<h1>Background removal</h1><p class=lede>{esc(description)} The cylinder flow with stationary "
              "reflections (the measurement background_removal of the test workspace), its POD with the mask of the "
-             "cylinder, and the images processed with 0 to 3 modes removed.</p>",
-             f"<h3>Checks</h3><p class=meta>{counts_text(bg.checks)}</p>", checks_table("background", bg.checks, previous),
-             BACKGROUND_METHOD, feature_table(bg), "<h3>Metrics</h3>",
-             table_of([(scenario_name("preprocessing", s), v["pod"]) for s, v in bg.metrics.items()], None,
-                      "preprocessing"),
-             figures_html(background_figures(bg, os.path.join(folder, "figures")))]
+             "cylinder, and the images processed with 0 to 3 modes removed; then the same images through the "
+             "PIV/PTV and the post-processing, with the background removal on and off.</p>",
+             f"<h3>Checks</h3><p class=meta>{counts_text(bg.checks)}</p>", checks_table("background", bg.checks, previous)]
+    if bg.data is not None:
+        parts += [BACKGROUND_METHOD, feature_table(bg), "<h3>Metrics</h3>",
+                  table_of([(scenario_name("preprocessing", s), v["pod"]) for s, v in bg.metrics.items()], None,
+                           "preprocessing"),
+                  figures_html(background_figures(bg, os.path.join(folder, "figures")))]
+    for level in ("images", "chain"):
+        if bg.levels.get(level):
+            parts.append(f"<h2>{esc(LEVELS[level][0])}</h2>")
+            parts.append(images_section(bg.levels[level], {"clean": bg.runs}, os.path.join(folder, "figures"),
+                                        "background") if level == "images" else
+                         chain_section(bg.levels[level], {"clean": bg.runs}))
     return page("Background removal — VelociHub benchmark", "".join(parts), navigation(result, "background"))
 
 
@@ -1139,14 +1346,17 @@ def _level_badge(checks):
             f'{", " + str(c["known"]) + " known" if c["known"] else ""}</span>')
 
 
-def summary_page(result, chart, previous, compare_label):
+def summary_page(result, chart, previous, compare_label, recipes_chart=None):
+    from .image_level import ranking
+
     c = result.counts()
     env = result.environment
     parts = ["<h1>VelociHub benchmark</h1>",
              '<p class="lede">Analytic flows, whose fields are known exactly, run through VelociHub step by step: '
              "the post-processing alone (the exact fields as results), the processing then the post-processing "
-             "(particle links and PIV vectors sampled from the exact fields, without images), and the background "
-             "removal of particle images with reflections.</p>",
+             "(particle links and PIV vectors sampled from the exact fields, without images), the background "
+             "removal of particle images with reflections, and particle images through the pre-processing, the "
+             "PIV/PTV and the post-processing (the pre-processing methods compared on harder images).</p>",
              f'<p class="meta">{esc(env["date"])} · VelociHub {esc(env["velocihub"])}'
              f'{" · " + esc(env["commit"]) if env.get("commit") else ""} · spicy_vki {esc(env.get("spicy_vki"))} · '
              f'Python {esc(env["python"])} · {result.seconds:.0f} s'
@@ -1162,7 +1372,7 @@ def summary_page(result, chart, previous, compare_label):
     parts.append(f"<p><strong>{esc(verdict)}</strong> A failed check is a regression, or an improvement that should "
                  "tighten its tolerance; a known issue is a limitation documented by a check expected to fail.</p>")
     # The levels of the cases
-    levels = [lv for lv in ("post", "processing") if lv in result.levels]
+    levels = [lv for lv in ("post", "processing", "images", "chain") if lv in result.levels]
     head = ["Case"] + [LEVELS[lv][0] for lv in levels] + ["Post: mean error (noise)", "Post: vorticity floor",
                                                          "SPICY (PTV)", "Binned (PTV)", "SPICY (PIV)"]
     if previous:
@@ -1200,6 +1410,36 @@ def summary_page(result, chart, previous, compare_label):
         parts.append(f'<figure><img src="figures/{esc(chart)}" alt="RMS error per case and method">'
                      "<figcaption><strong>Processing level: RMS error per case and method</strong>, noise scenario. "
                      "The dashed line is the noise of the data each method is given.</figcaption></figure>")
+    hard = [r for r in result.cases if recipes_of(r.metrics.get("images", {}), "hard")]
+    if hard:
+        parts.append("<h2>Which pre-processing helps the PIV/PTV</h2><p class=meta>The hard images of each flow (dim "
+                     "particles of varied brightness and size, camera noise, an uneven light sheet, reflections) "
+                     "with each recipe: the best for each measure, and its value against no pre-processing. See the "
+                     "page of each flow for all of them.</p>")
+        rows = []
+        for r in hard:
+            m = r.metrics["images"]
+            best = ranking(m)
+            cells = [f'<a href="{r.case.key}.html">{esc(r.flow.name)}</a>']
+            for method, key in (("piv", "rms"), ("piv", "outliers"), ("ptv", "links_per_pair"),
+                                ("ptv", "wrong_links"), ("ptv", "track_length_median")):
+                order = best.get(method, {}).get(key, [])
+                if not order:
+                    cells.append("—")
+                    continue
+                top = order[0]
+                cells.append(f"{esc(RECIPES[top].name)}<br><span class=note>{fmt(key, m[f'hard_{top}'][method][key])}"
+                             f" vs {fmt(key, m.get('hard_none', {}).get(method, {}).get(key))} without</span>")
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+        head = ["Flow", "PIV: lowest RMS error (px)", "PIV: fewest outliers (%)", "PTV: most links per pair",
+                "PTV: fewest wrong links (%)", "PTV: longest tracks (frames)"]
+        parts.append('<div class="scroll"><table><thead><tr>' + "".join(f"<th>{esc(h)}</th>" for h in head)
+                     + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+        if recipes_chart:
+            parts.append(f'<figure><img src="figures/{esc(recipes_chart)}" alt="The pre-processing compared">'
+                         "<figcaption><strong>The pre-processing on the hard images</strong>, relative to none "
+                         "(dashed line): below it, a lower error of the PIV, fewer wrong links of the PTV."
+                         "</figcaption></figure>")
     for title, statuses in (("Checks not as expected", ("fail", "fixed", "missing")), ("Known issues", ("known",))):
         rows = _issue_rows(result, statuses)
         parts.append(f"<h2>{title}</h2>")
@@ -1238,6 +1478,11 @@ def _checks_json(key, checks):
              "known_issue": c.check.known_issue} for c in checks]
 
 
+def _runs_json(runs):
+    return {style: {folder: {k: _clean(rec.get(k)) for k in ("status", "message", "seconds")}
+                    for folder, rec in records.items()} for style, records in runs.items()}
+
+
 def to_json(result):
     cases = {}
     for r in result.cases:
@@ -1246,12 +1491,15 @@ def to_json(result):
             "seeding": r.case.seeding, "pairs": r.case.pairs, "spacing": r.case.spacing,
             "regression": r.case.regression, "binning": r.case.binning, "metrics": _clean(r.metrics),
             "checks": _checks_json(r.case.key, r.checks),
-            "errors": {s: d.errors for s, d in r.data.items() if d.errors}}
+            "errors": {s: d.errors for s, d in r.data.items() if d.errors},
+            "runs": _runs_json(r.runs)}
     out = {"format": "VelociHub benchmark", "levels": list(result.levels), "environment": result.environment,
            "seconds": result.seconds, "counts": result.counts(), "cases": cases}
     if "background" in result.extra:
         bg = result.extra["background"]
-        out["background"] = {"metrics": _clean(bg.metrics), "checks": _checks_json("background", bg.checks)}
+        out["background"] = {"metrics": _clean(bg.metrics), "checks": _checks_json("background", bg.checks),
+                             "levels": _clean({k: v for k, v in bg.levels.items() if k != "preprocessing"}),
+                             "runs": _runs_json({"clean": bg.runs})}
     return out
 
 
@@ -1287,14 +1535,24 @@ def write_report(result, folder, compare=None):
         with open(os.path.join(folder, BACKGROUND_PAGE), "w", encoding="utf-8") as f:
             f.write(background_page(result, folder, prev_checks))
     chart = summary_chart(result, os.path.join(folder, "figures"))
+    recipes_chart = recipes_summary_figure(result, os.path.join(folder, "figures"))
     index = os.path.join(folder, "index.html")
     with open(index, "w", encoding="utf-8") as f:
-        f.write(summary_page(result, chart, previous, label))
+        f.write(summary_page(result, chart, previous, label, recipes_chart))
     with open(os.path.join(folder, "results.json"), "w", encoding="utf-8") as f:
         json.dump(to_json(result), f, indent=1, ensure_ascii=False)
     return index
 
 
+def reports_folder():
+    """The folder of the reports: benchmark_reports in the folder of the repository of VelociHub (left out of git by
+    its .gitignore), or ~/VelociHub/benchmarks when VelociHub is installed without its repository."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if os.path.isfile(os.path.join(repo, "pyproject.toml")) and os.path.isdir(os.path.join(repo, "velocihub")):
+        return os.path.join(repo, "benchmark_reports")
+    return os.path.join(os.path.expanduser("~"), "VelociHub", "benchmarks")
+
+
 def default_folder():
-    """A new folder for a report: ~/VelociHub/benchmarks/report_<date>_<time>."""
-    return os.path.join(os.path.expanduser("~"), "VelociHub", "benchmarks", f"report_{datetime.now():%Y%m%d_%H%M%S}")
+    """A new folder for a report, named by the date and time of the run: reports_folder()/report_<date>_<time>."""
+    return os.path.join(reports_folder(), f"report_{datetime.now():%Y%m%d_%H%M%S}")

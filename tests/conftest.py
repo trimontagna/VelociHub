@@ -18,7 +18,11 @@ import synthetic  # noqa: E402
 
 def pytest_addoption(parser):
     parser.addoption("--benchmark-report", default=None, metavar="FOLDER",
-                     help="write the report of the benchmark (test_benchmark.py) in this folder")
+                     help="write the report of the benchmark (test_benchmark.py) in this folder (by default in "
+                          "benchmark_reports of the repository, a folder per run)")
+    parser.addoption("--benchmark-images", action="store_true",
+                     help="also run the levels of the benchmark on particle images (pre-processing -> processing, "
+                          "the full chain: PaIRS-UniNa and TracTrac, about 20 minutes)")
 
 
 @pytest.fixture(scope="session")
