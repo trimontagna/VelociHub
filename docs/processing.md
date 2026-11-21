@@ -106,6 +106,29 @@ page (?) follows the PaIRS interface. The direct correlation stays off, so that 
 ratio. The images are read in one channel as every step reads them (`velocihub/greyscale.py`: the brightness
 max(R, G, B) of a colour image).
 
+> **Note: the final window filters the small scales.** Each vector is the mean displacement over its window, so the
+> structures smaller than about the window are attenuated. The statistics that depend on them come out low: the
+> fluctuations a little, the gradients (vorticity, dissipation) much more. The grid spacing alone doesn't set the
+> resolution: a 32 px window every 16 px filters more than the 16 px grid.
+
+On the synthetic turbulence of the [benchmark](benchmark.md) (200 pairs, 1 POD mode removed, then the
+post-processing), against the exact statistics of the flow. The first row is the exact field on the same 200 maps:
+what the record length allows.
+
+| Final window (overlap, grid) | Error of the fields (px RMS) | Outliers removed | RMS of u | Turbulent kinetic energy | Dissipation ÷ best of the grid |
+|---|---|---|---|---|---|
+| Exact fields, same maps (16 px grid) | 0 | 0 | 0.95 | 1.01 | 0.96 |
+| 32 px (50 %, 16 px) | 0.14 | 1 | 0.83 | 0.79 | 0.68 |
+| 24 px (33 %, 16 px) | 0.13 | 23 | 0.88 | 0.85 | 0.78 |
+| 16 px (0 %, 16 px) | 0.22 | 49 | 0.90 | 0.89 | 0.88 |
+| 16 px (50 %, 8 px) | 0.33 | 1711 | 0.89 | 0.87 | 1.01 (of the 8 px grid) |
+
+Smaller final windows recover the fluctuations and the gradients, at the cost of noise and outliers (fewer particles
+per window). At 16 px with 50 % overlap the dissipation reaches what its grid allows, partly because the noise adds to
+the gradients. Choose the final window from the seeding (enough particles in each window), and expect the
+fluctuations, and above all the dissipation, to be underestimated with large windows. A PTV, which doesn't average
+over a window, kept 0.92 of the dissipation on the same 16 px grid (0.99 with SPICY).
+
 ### TracTrac (PTV)
 
 | Interface | API key | Default | Meaning |
@@ -137,7 +160,7 @@ max(R, G, B) of a colour image).
 |---|---|---|---|
 | Regression: None / SPICY | `method` | `"none"` | Fit each displacement field after the PIV/PTV: PTV, the links of the particles of each pair (at the middle of their two positions, with their displacement; those in masked cells left out); PIV, its valid vectors. Evaluated at the grid points with flow. |
 | RBF basis | `basis` | `"gauss"` | Gaussian RBFs or `c4` (compact support: faster, slightly less smooth). |
-| Points per RBF (per level) | `n_k` | `(4,)` | Data (vectors, or particles after a PTV) each RBF covers, one number per level (e.g. `(4, 10)`: fine + coarse). Fewer: closer fit, slower. |
+| Points per RBF (per level) | `n_k` | `"auto"` | Data (vectors, or particles after a PTV) each RBF covers, one number per level (e.g. `(4, 10)`: fine + coarse). Fewer: closer fit, slower. `auto`: 3 for the vectors of a PIV, 4 for the particles of a PTV (why: below). A number entered applies to both. |
 | Collocation | `method` (of the settings) | `"clustering"` | Where RBFs are placed: k-means `clustering`, Halton `semirandom`, or `regular` grid. |
 | RBF radius min / max (image width) | `r_min` / `r_max` | 0.01 / 0.3 | Smallest/largest RBF radius as a fraction of the image width. |
 | RBF value at the nearest RBF | `eps_l` | 0.7 | Value of an RBF at its nearest neighbour (0-1), which sets its radius. |
@@ -146,6 +169,7 @@ max(R, G, B) of a colour image).
 | Condition number | `k_cond` | 1e12 | Regularization of the fit matrix. |
 | Particle outlier test (0: none) | `outlier_test` | 3 | PTV: before the fit, each link is compared with the median of its nearest links (the normalized median test of scattered data, Westerweel & Scarano 2005, Duncan et al. 2010; 2 passes): left out if `|d − median| / (median difference of the neighbours + 0.1 px)` exceeds this. The PIV vectors are validated by the PIV. |
 | Neighbours of the outlier test | `outlier_neighbours` | 10 | PTV: the nearest links each link is compared with, within 3 grid spacings (with fewer than 4, the link is kept). |
+| Fit every n-th map | `map_step` | 1 | SPICY fits the maps 1, 1 + n, 1 + 2n... only; the results hold those maps, with their pairs (`regression_map_step` and `computed_pairs` in `settings.json`). The PIV/PTV still computes every pair, and a PTV keeps all its tracks. For statistics of long time-resolved records: see below. |
 
 `vectors.npz` then holds the regressed fields, plus the raw ones (`raw_u_px`, `raw_v_px`, `raw_info`: the binned
 cells of a PTV, set by its grid spacing, min. particles per cell and median test), the residual of each fit (RMS at the
@@ -154,6 +178,48 @@ data fitted, px), the number of data fitted (`regression_n_points`) and of links
 100 % of them and brings the error of SPICY back within 1.1 times that without wrong links (4 to 5 times without the
 test), and leaves out under 0.6 % of the good links. The quality figures keep using the raw PIV/PTV
 validity, and the grid points out of the flow (valid in less than 10 % of the pairs) are not evaluated.
+
+> **Note: the points per RBF set how much SPICY smooths, so their default depends on the data.** Each RBF is fitted
+> on about `n_k` data: more points per RBF means fewer, wider RBFs, so more smoothing. What suits depends on the data,
+> hence the two defaults of `auto` (3 for a PIV, 4 for a PTV; VelociHub 1.2.0 used 4 for both):
+> - **PIV vectors** are already averaged over their windows and have little noise: fewer points per RBF follow the
+>   field more closely. 3 does better than the default 4 on most flows; 8 smooths out the structures shorter than
+>   about 5 grid spacings, and the error becomes larger than that of the vectors it fits.
+> - **PTV particles** each carry the noise of a single link: fewer points per RBF average less of it. 3 is worse
+>   than 4 on most flows; 8 is better on smooth flows but loses the short structures.
+
+On the exact links and vectors of the benchmark (0.1 px of noise; no images), RMS error of the fields (px) and the
+amplitude kept of a wave 80 px long (modes flow):
+
+| Data | Points per RBF | Uniform | Cylinder | Jet | Modes | Blasius | Turbulence | Wave of 80 px kept |
+|---|---|---|---|---|---|---|---|---|
+| PIV vectors | 3 | 0.102 | **0.120** | **0.135** | **0.763** | **0.094** | **0.111** | **82 %** |
+| PIV vectors | 4 (default) | 0.099 | 0.137 | 0.163 | 0.903 | 0.096 | 0.121 | 29 % |
+| PIV vectors | 8 | **0.098** | 0.222 | 0.323 | 0.980 | 0.103 | 0.323 | 0 % |
+| PTV particles | 3 | 0.194 | 0.201 | 0.147 | **0.664** | 0.194 | 0.224 | 89 % |
+| PTV particles | 4 (default) | 0.126 | 0.145 | **0.104** | 0.721 | 0.126 | 0.122 | **93 %** |
+| PTV particles | 8 | **0.090** | **0.130** | 0.132 | 0.835 | **0.092** | **0.106** | 74 % |
+| PTV binned, no SPICY | — | 0.098 | 0.127 | 0.202 | 0.542 | 0.135 | 0.183 | 78 % |
+
+So the default (`auto`) is 3 points per RBF for a PIV and 4 for a PTV. Change it for a PTV to 6–8 when the
+smallest structures to resolve are several grid spacings long (it averages more particle noise), and for a PIV to
+fewer only for very fine structures. A project saved before kept the 4 it showed: enter `auto` to use the new default.
+
+> **Note: fitting every n-th map.** SPICY takes about 0.7 s per map (512 x 320 px images, 16 px grid), so a long
+> time-resolved record takes long. Consecutive maps of such a record are nearly the same: maps closer than about half
+> the integral time repeat each other. For its statistics, fitting every n-th map (`map_step`), with the maps about
+> half an integral time apart, changes them little and divides the time of SPICY by n. On the synthetic turbulence
+> of the benchmark (1280 pairs, 10 flow times, integral time 11.4 frames), against SPICY on every map:
+>
+> | Maps fitted | SPICY time (PIV; PTV) | Change of the statistics (mean, RMS, integral scales, dissipation) |
+> |---|---|---|
+> | every map (1280) | 15 min; 18 min | — |
+> | every 6th (214) | 2.2 min; 2.2 min | below 0.5 % |
+> | every 12th (107) | 1.1 min; 1.2 min | below 1 % (the integral time 1–2 %) |
+>
+> Keep every map for instantaneous fields, time series, spectra and accelerations at the time resolution of the
+> record. Compare a SPICY result with the PIV/PTV on the same maps: the binned PTV itself needs many maps for its mean
+> (few particles per cell and map), so its mean gets noisier with fewer maps, while that of SPICY doesn't.
 
 ### Particles in the windows (diagnostic only)
 

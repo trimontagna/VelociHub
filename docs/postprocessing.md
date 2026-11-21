@@ -192,6 +192,26 @@ The standard deviations (u_rms, v_rms, vorticity rms) and the Reynolds shear str
 The turbulence intensity is the 2D form Tu = 100 √((σu² + σv²) / 2) / u_ref. In the sensor space the flow time is in
 frames: L_FoV / u_ref pairs, each pair spanning frame_step frames.
 
+> **Note: the convergence figure can't tell that a time-resolved record is too short.** It plots the change of each
+> statistic when one more map is added, and `maps_to_converge_1pct` (in `metrics.json`) is the first number of maps
+> from which the change of the mean stays below 1 % of u_ref. Consecutive maps of a time-resolved record are nearly
+> the same, so that change is small from the start, even when the record has seen only a few structures: on the
+> synthetic turbulence of the [benchmark](benchmark.md), it reports 2 maps whatever the length, while the mean is
+> still 5 % of U0 off after 200 maps. Judge the length of a record in **flow times** (the x axis of the figure:
+> particles at the mean velocity crossing the field of view), or compare the statistics of its two halves. On that
+> turbulence (integral length about a third of the field of view), the exact fields need:
+
+| Record | Error of the mean (% of U0) | RMS of u, v | Dissipation |
+|---|---|---|---|
+| 1.6 flow times (200 maps) | 4.9 | 0.95, 1.05 | 0.96 |
+| 5 flow times | 2.0 | 1.05, 0.94 | 1.01 |
+| 10 flow times | 1.1 | 1.02, 0.99 | 1.04 |
+| 15.6 flow times (2000 maps) | 0.5 | 1.01, 0.99 | 1.03 |
+
+The RMS and the dissipation are ratios to the exact values of the flow (the dissipation to the best its grid allows).
+About 10 flow times bring this flow's statistics within a few %; a flow with larger structures, relative to the
+field of view, needs more.
+
 ## Outputs
 
 | File | Content |

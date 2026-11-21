@@ -33,6 +33,25 @@ p.run()           # pre-processing, PIV, post-processing
 
 ## Quick start
 
+VelociHub needs two Python environments: its own (Python 3.12 or later), and one for the PIV engine PaIRS-UniNa
+(Python 3.10 to 3.13, the only versions it exists for), which VelociHub runs in its own process. The PTV (TracTrac)
+needs no second environment.
+
+| Package | Needed for | Installed by |
+|---|---|---|
+| Python 3.12+ | VelociHub | — |
+| numpy, scipy, matplotlib, contourpy, pillow, opencv-python, psutil | VelociHub | `pip install -e .` (or `environment.yml`) |
+| Tkinter | The interface | Included with Python on Windows and macOS, and with conda; `python3-tk` on Debian/Ubuntu |
+| imutils, parse, h5py | The PTV with TracTrac (vendored in VelociHub) | `pip install -e ".[ptv]"` |
+| spicy_vki | The regression of the vector fields (SPICY) | `pip install -e ".[regression]"` |
+| imageio-ffmpeg | MP4 videos (GIF without it) | `pip install -e ".[video]"` |
+| pytest | The tests | `pip install -e ".[test]"` |
+| Python 3.10-3.13 with PaIRS-UniNa (it brings numpy, scipy, matplotlib, PySide6) | The PIV | `environment-pairs.yml`, or `pip install PaIRS-UniNa` in that Python |
+
+`.[all]` installs the PTV, regression and video extras together. Tested on Windows 11 with Python 3.12-3.14, numpy
+2.5, scipy 1.18, matplotlib 3.11, opencv-python 5.0, spicy_vki 1.1.2, and PaIRS-UniNa 0.2.12 on Python 3.13. The tested
+version of each package is in [docs/installation.md](docs/installation.md).
+
 ```bash
 # 1. VelociHub (Python 3.12 or later)
 git clone https://github.com/RexAttaque/VelociHub.git
@@ -79,19 +98,6 @@ again.
 | `velocihub-post-archive-gui` | `run_VelociHub_post_archive_gui.py` | Its interface |
 
 `python -m velocihub` also opens the interface.
-
-## Dependencies
-
-| Package | Needed for |
-|---|---|
-| numpy, scipy, matplotlib, contourpy, pillow, opencv-python, psutil | VelociHub (installed with it) |
-| Tkinter | The interface (included with Python on Windows and macOS; `python3-tk` on Linux) |
-| PaIRS-UniNa (Python 3.10-3.13, separate environment) | The PIV |
-| imutils, parse, h5py (`pip install velocihub[ptv]`) | The PTV with TracTrac (vendored) |
-| spicy_vki (`velocihub[regression]`) | The regression of the vector fields |
-| imageio-ffmpeg (`velocihub[video]`) | MP4 videos (GIF without it) |
-
-Tested on Windows 11 with Python 3.12-3.14, numpy 2.5, matplotlib 3.11, PaIRS-UniNa 0.2.12 (Python 3.13).
 
 ## Tests
 

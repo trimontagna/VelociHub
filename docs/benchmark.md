@@ -43,8 +43,9 @@ time (`report_20261120_183015`), so that the runs can be gone through and compar
 (`.gitignore`). When VelociHub is installed without its repository, they go to `~/VelociHub/benchmarks`. `--out`
 writes one elsewhere.
 
-**How long:** about a minute without the levels on images; about 20 minutes with them (12 cores; the turbulence and
-its SPICY fits on 200 maps take the longest). The images are rendered once and kept in
+**How long:** about a minute without the levels on images; about 20 minutes with them (12 cores). The longest is
+the chain of the turbulence (1281 images: its PIV and PTV take 1–3 minutes each, its SPICY fits, on every 6th map, about
+2 minutes each); the other measurements run meanwhile. The images are rendered once and kept in
 `~/VelociHub/benchmarks/images` (about 100 MB), then reused while their parameters stay the same.
 | Python | `from velocihub.benchmark import run_benchmark, report`; `result = run_benchmark(["jet"], levels=("post",))`; `report.write_report(result, "folder")`. |
 
@@ -176,7 +177,8 @@ Not modelled yet:
 
 ## The levels on images
 
-**The images.** Each case's test images (`images.render`: 41 frames for the steady flows, 201 for the turbulence) are
+**The images.** Each case's test images (`images.render`: 41 frames for the steady flows, 201 for the turbulence;
+1281 for the chain of the turbulence, see [the record length](#the-record-length-convergence-of-the-statistics)) are
 linked into a measurement folder of the work folder, with the mask of the body, and run through `vh.Project` as a user
 would: `set_preprocessing` with the recipe, `set_piv` with the engine, then the PIV/PTV (the pre-processing first, as
 Run step > Singular does). Each run keeps its own folders (`PreProcessing_<recipe>`, `PIV_<recipe>`, `PTV_<recipe>`,
@@ -230,10 +232,81 @@ energy, and the stationary reflections of the background removal test. The test 
 
 **The full chain** keeps the grid of the case, the units and the statistics of the samples to the rounding. The
 error of the mean of the PIV is 0.003–0.09 px on the steady flows, except the jet (the still fluid) and the modes
-(λ = 48 px isn't resolved by 32 px windows); 0.19 px for the turbulence, whose 200 maps (18 integral times) converge
-no closer. For the turbulence, the PIV windows lower the fluctuations: RMS of u at 0.83 of the modes'
-and dissipation at 0.52, against 0.93 and 0.70 for the PTV. With the background removal on, the cylinder with
-reflections has 0.63 times the error of the mean of the PIV and 0.57 times that of the PTV.
+(λ = 48 px isn't resolved by 32 px windows); 0.04 px for the turbulence (0.06 for the PTV), as close as its 10 flow
+times allow. With the background removal on, the cylinder with reflections has 0.63 times the error of the mean of
+the PIV and 0.57 times that of the PTV.
+
+The statistics of the turbulence through the chain (10 flow times), against the exact values:
+
+| Method | RMS of u | RMS of v | Turbulent kinetic energy | L_x^u | Integral time | Dissipation ÷ best of the grid |
+|---|---|---|---|---|---|---|
+| Exact fields, same maps | 1.02 | 0.99 | 1.04 | 0.96 | 0.97 | 1.04 |
+| PIV | 0.90 | 0.87 | 0.81 | 1.01 | 1.01 | **0.75** |
+| PIV + SPICY | 0.89 | 0.87 | 0.80 | 1.00 | 1.01 | **0.75** |
+| PTV | 1.00 | 0.97 | 0.99 | 0.94 | 0.92 | 0.99 |
+| PTV + SPICY | 1.03 | 0.99 | 1.05 | 0.95 | 0.94 | 1.06 |
+
+The PTV gets the statistics within about 8 %. The PIV gets the large scales (integral length and time), but its 32 px
+windows filter the small ones: 0.81 of the kinetic energy and 0.75 of the dissipation (a known issue; with smaller
+final windows, see `docs/processing.md`: 0.88 of the dissipation at 16 px, on 200 maps). SPICY can't bring back what the vectors don't have.
+
+## The record length: convergence of the statistics
+
+A time-resolved record converges by the **flow times** it covers (the particles at the mean velocity crossing the
+field of view, 512 px at 4 px per pair: 128 pairs), not by its number of maps: consecutive maps are nearly the same.
+The exact fields of the turbulence (integral length L_x^u = 45 px), post-processed over records of each length:
+
+| Record | Error of the mean (px; % of U0) | RMS of u, v | Integral length L_x^u | Dissipation ÷ best of the grid |
+|---|---|---|---|---|
+| 0.5 flow time (64 maps) | 0.38; 9.5 % | — | — | — |
+| 1.6 flow times (200 maps) | 0.20; 4.9 % | 0.95, 1.05 | 0.90 | 0.96 |
+| 5 flow times | 0.08; 2.0 % | 1.05, 0.94 | 0.99 | 1.01 |
+| 10 flow times (1280 maps) | 0.04; 1.1 % | 1.02, 0.99 | 0.96 | 1.04 |
+| 15.6 flow times (2000 maps) | 0.02; 0.5 % | 1.01, 0.99 | 0.92 | 1.03 |
+
+So the chain of the turbulence runs 10 flow times (`image_level.CHAIN_FLOW_TIMES`: 1281 images), and the post level
+2000 maps. At 200 maps, the error of the mean of the PIV (0.19 px) was that of the record (0.20 px for the exact
+fields on the same maps); the part of the PIV itself was 0.02 px. The images level keeps 201 images: it ranks the recipes, which doesn't need
+converged statistics.
+
+The steady flows keep 41 images (0.3 flow time): their fields don't change, so the error of their mean is that of the
+method. It stops falling within a few maps (PIV, cylinder: 0.098 px for one map, 0.087 for 20, 0.092 for 40; Blasius
+0.051 to 0.049; modes 0.71 to 0.68): it is the bias of the windows, which more maps don't reduce. Only the uniform
+flow, with no bias, keeps averaging (0.015 px for one map, 0.003 for 40).
+
+**SPICY on a subset of the maps (for new tests: the trick, and how to adapt it).** SPICY takes about 0.7 s per map
+here, so on every map of the 1280 of the turbulence it would take 15–18 minutes per run. The chain fits every 6th map
+instead (the SPICY setting `map_step`, `image_level.CHAIN_SPICY_MAP_STEP`), while its PIV and PTV keep every map. The
+maps 6 frames apart are about half an integral time apart (11.4 frames): the maps between them repeat them, so the
+statistics barely change. Against SPICY on every map (ratios to the exact values; the error of the mean in px):
+
+| | PIV + SPICY, every map | every 6th | every 12th | PTV + SPICY, every map | every 6th | every 12th |
+|---|---|---|---|---|---|---|
+| Maps; SPICY time | 1280; 15 min | 214; 2.2 min | 107; 1.1 min | 1280; 18 min | 214; 2.2 min | 107; 1.2 min |
+| Error of the mean (px) | 0.069 | 0.069 | 0.069 | 0.072 | 0.072 | 0.073 |
+| RMS of u | 0.893 | 0.896 | 0.899 | 1.027 | 1.030 | 1.032 |
+| Turbulent kinetic energy | 0.802 | 0.805 | 0.799 | 1.048 | 1.047 | 1.042 |
+| Integral length L_x^u | 1.004 | 1.006 | 1.009 | 0.952 | 0.952 | 0.949 |
+| Integral time | 1.006 | 1.004 | 0.998 | 0.942 | 0.946 | 0.941 |
+| Dissipation ÷ best of the grid | 0.745 | 0.744 | 0.744 | 1.057 | 1.058 | 1.058 |
+
+The PIV and PTV without SPICY, taken on the same subsets, move by as little, so what SPICY changes against the data it
+fits is the same. One exception: the mean of the binned PTV gets noisier with fewer maps (0.058 px on every map, 0.064
+every 6th, 0.075 every 12th; few particles per cell and map), while that of SPICY doesn't: the PIV/PTV of the chain keep
+every map.
+
+To adapt it to a new flow or record length:
+- Choose the step from the integral time T (in frames), not from the number of maps: maps about T/2 apart. Twice
+  that (one T) still costs about 1 % here, the integral time 1–2 %.
+- The record length sets the convergence (the flow times), the step only the cost: halving the record halves the maps
+  fitted, at the same step.
+- The quantities resolved in time (time series, spectra, accelerations, the integral time itself with a step close to
+  T) need every map, or a step well below T.
+- Check it once as above: the statistics of SPICY on the subset against SPICY on every map, and against the PIV/PTV on
+  the same maps.
+
+The convergence figure of the post-processing can't see this (its residual between N and N − 1 maps is small from the
+start on a time-resolved record): see `docs/postprocessing.md`.
 
 ## On a real recording
 
@@ -299,13 +372,13 @@ a failed check is either a regression, or an improvement that should tighten its
 A **known issue** is a check expected to fail, with its reason. It is reported apart from the failures and is an
 `xfail` in the tests. When it starts passing it is reported, and its test fails, so that it becomes a normal check.
 
-The known issues of VelociHub 1.2 (SPICY defaults), all at the processing level:
+The known issues of SPICY with its defaults (4 points per RBF for a PTV, 3 for a PIV), all at the processing level:
 
 | Issue | Seen in |
 |---|---|
 | With 4 points per RBF, SPICY on particles is noisier than the binning (little averaging per RBF) | uniform, cylinder |
 | Worse at the edges of the field of view and of the masks (RBFs constrained on one side) | uniform, cylinder, blasius, turbulence |
-| SPICY on PIV vectors smooths out structures shorter than about 5 grid spacings: worse than the vectors it fits | jet, modes |
+| SPICY on PIV vectors smooths the structures of about 5 grid spacings and shorter (80 % of their amplitude kept): worse than the vectors it fits | modes |
 | The wavelength of 3 grid spacings isn't resolved by SPICY on particles | modes |
 
 On particle images (levels images and chain):
@@ -314,6 +387,7 @@ On particle images (levels images and chain):
 |---|---|
 | The default recipe removes 6 POD modes: with 41 images, the modes beyond the first hold the particles of single images, whose pairs fail | uniform, cylinder, jet, blasius, background removal (PIV); every case (PTV wrong links) |
 | The POD background removal takes the particles of still fluid for the background: the PIV/PTV find nothing there | jet |
+| The PIV windows (32 px, twice the grid) filter the small structures: the fluctuations and above all the dissipation come out low | turbulence (chain) |
 
 SPICY on particles now runs an outlier test of the links before its fit: the normalized median test of scattered data
 (`outlier_test` 3, `outlier_neighbours` 10; see `docs/processing.md`). With 2 % of the links wrong it catches 93–100 %
