@@ -39,7 +39,7 @@ import numpy as np
 from ..fields import load_vectors
 from ..piv.displacements import pair_particles, read_tracks
 from ..postprocessing import PostProcessing, PostSettings
-from .flows import FLOWS, HEIGHT
+from .flows import FLOWS, HEIGHT, WIDTH
 from .images import BACKGROUND_CASE, CLEAN, HARD, frames_of, mask_polygons, render
 from .measurement import CAMERA
 from .post_level import NU, post_metrics
@@ -95,6 +95,17 @@ HARD_FRAMES = {True: 41, False: 61}
 # The recipe of the chain (1 mode: the default 6 modes remove the particles of single images of these short
 # sequences, a known issue of the level images), and those of the background removal on and off
 CHAIN_RECIPE = "pod1"
+# The chain of the unsteady flows (the turbulence) runs this many flow times (the field of view crossed at the mean
+# velocity): its mean then converges within about 1 % of U0 (5 % at the 200 maps of the images level), its RMS and
+# dissipation within about 4 %. The steady flows keep their 41 images: the error of their mean is the bias of the
+# method, reached within a few maps.
+CHAIN_FLOW_TIMES = 10
+# SPICY fits every this many maps of those long records (the SPICY setting map_step): the maps 6 frames apart, about
+# half the integral time of the turbulence (11.4 frames), repeat each other, so its statistics change by less than
+# 0.5 % (the error of the mean, RMS, integral scales and dissipation, against SPICY on every map) and SPICY takes about
+# 2 minutes instead of 15 per run. For another flow or record, keep the maps about half an integral time apart, and
+# compare SPICY with the PIV/PTV on the same maps (docs/benchmark.md, the record length).
+CHAIN_SPICY_MAP_STEP = 6
 BACKGROUND_ON_OFF = {"on": "pod1", "off": "none"}
 
 # The scenarios of the levels (report), the methods
@@ -146,6 +157,29 @@ def clean_measurement(key):
     return Measurement(key, key, CLEAN, list(FLOWS).index(key), frames_of(flow))
 
 
+def flow_time(flow):
+    """The pairs a particle at the mean velocity takes to cross the field of view (the flows that have one: u0)."""
+    return WIDTH / flow.u0
+
+
+def chain_frames(flow):
+    """The images of a flow through the chain: CHAIN_FLOW_TIMES flow times if it is unsteady."""
+    return frames_of(flow) if flow.steady else int(round(CHAIN_FLOW_TIMES * flow_time(flow))) + 1
+
+
+def spicy_settings(m):
+    """The SPICY settings of the runs of a measurement changed from the defaults: every CHAIN_SPICY_MAP_STEP-th map
+    of the long records of the chain (chain_frames), every map otherwise."""
+    return {"map_step": CHAIN_SPICY_MAP_STEP} if m.name != m.flow_key and m.style is CLEAN else {}
+
+
+def chain_measurement(key):
+    """The test images of a case through the chain: those of the images level, or longer ones (chain_frames)."""
+    m = clean_measurement(key)
+    frames = chain_frames(m.flow())
+    return m if frames == m.frames else Measurement(f"{key}_chain", key, CLEAN, m.seed, frames)
+
+
 def background_measurement():
     """The images of the background removal test (the cylinder with reflections)."""
     return Measurement(BACKGROUND_CASE, "cylinder", CLEAN, 99, frames_of(FLOWS["cylinder"]()), reflections=True)
@@ -193,16 +227,17 @@ def run_measurement(m, runs, folder, report, tick=None):
     """The runs of a measurement in its folder, one after the other, through the API (Project): {run: {"file": its
     vectors.npz or None, "status", "message", "seconds"}}. tick(): after each run."""
     return run_recipes(folder, f"{m.style.key}_{m.name}", mask_polygons(m.flow()), runs, report, tick,
+                       spicy=spicy_settings(m),
                        label=f"Images: {m.style.name.lower()} of {m.name}")
 
 
 def run_recipes(folder, name, polygons, runs, report, tick=None, label="Images", piv_settings=None,
-                ptv_settings=None, export_format=None):
+                ptv_settings=None, export_format=None, spicy=None):
     """The runs of the images of a folder (its project: name; the masks: polygons), one after the other, through
     the API (Project) as Run step > Singular of the page Velocimetry: {run: {"file": its vectors.npz or None,
     "status", "message", "seconds"}}. piv_settings, ptv_settings: of the engines (PIV_SETTINGS and the defaults of
-    TracTrac by default); export_format: of the pre-processed images (those of the images by default). tick(): after
-    each run."""
+    TracTrac by default); export_format: of the pre-processed images (those of the images by default); spicy: the
+    SPICY settings of the runs with SPICY changed from its defaults. tick(): after each run."""
     from .. import batch, piv
     from ..api import Project
 
@@ -218,7 +253,8 @@ def run_recipes(folder, name, polygons, runs, report, tick=None, label="Images",
                                       modes_removed=recipe.modes, export_folder=f"PreProcessing_{recipe.key}",
                                       export_format=export_format)
             extra = ((piv_settings or PIV_SETTINGS) if run.method == "piv" else (ptv_settings or {}))
-            project.set_piv(engine=ENGINES[run.method], regression="spicy" if run.spicy else "none",
+            regression = {"method": "spicy", "settings": dict(spicy or {})} if run.spicy else "none"
+            project.set_piv(engine=ENGINES[run.method], regression=regression,
                             output_folder=run.folder, **extra)
             project.save()
             # As Project.run_piv (Run step > Singular of the page Velocimetry), quiet
@@ -244,9 +280,10 @@ def run_recipes(folder, name, polygons, runs, report, tick=None, label="Images",
 # Metrics
 
 
-def exact_fields(flow, X, Y, n):
-    """The exact fields of the pairs (k, k + 1) at the grid points (px, Y up): at the middle of each pair."""
-    times = [k + 0.5 for k in range(n)]
+def exact_fields(flow, X, Y, n, firsts=None):
+    """The exact fields of the pairs (k, k + 1) at the grid points (px, Y up): at the middle of each pair. firsts:
+    the first frames of the pairs (0 to n - 1 by default)."""
+    times = [k + 0.5 for k in (range(n) if firsts is None else firsts)]
     ex = [flow.velocity(X, Y, t) for t in times]
     return ({"U": np.array([e[0] for e in ex]), "V": np.array([e[1] for e in ex]),
              "W": np.array([flow.vorticity(X, Y, t) for t in times])}, times)
@@ -260,7 +297,8 @@ def image_metrics(flow, path):
     f = load_vectors(path, pixels=True)
     X, Y, status = f.x.astype(np.float64), f.y.astype(np.float64), f.status
     U, V = f.u_px.astype(np.float64), f.v_px.astype(np.float64)
-    exact, _ = exact_fields(flow, X, Y, f.n)
+    firsts = [a for a, _ in f.settings["pairs"]] if f.settings.get("pairs") else None
+    exact, _ = exact_fields(flow, X, Y, f.n, firsts)
     m = field_metrics(flow, X, Y, status, U, V, exact)
     flowing = status == 0
     err = np.hypot(U - exact["U"], V - exact["V"])[:, flowing]
@@ -276,11 +314,12 @@ def image_metrics(flow, path):
         T = read_tracks(f.tracks)
         counts, errors = [], []
         for k in range(f.n):
-            pp = pair_particles(T, k)
+            frame = k * f.map_step
+            pp = pair_particles(T, frame)
             if pp is None or not pp["linked"]:
                 counts.append(0)
                 continue
-            eu, ev = flow.velocity(pp["x"], HEIGHT - pp["y"], k + 0.5)
+            eu, ev = flow.velocity(pp["x"], HEIGHT - pp["y"], frame + 0.5)
             e = np.hypot(pp["dx"] - eu, pp["dy"] - ev)
             counts.append(e.size)
             errors.append(e)
@@ -308,6 +347,9 @@ def chain_metrics(flow, case, path):
     full = post_metrics(flow, case, fields, post, 0.0, times)
     m = {k: full[k] for k in CHAIN_KEYS if k in full}
     m["field_rms"] = image_metrics(flow, path)["rms"]
+    m["maps"] = int(fields.n)
+    if not flow.steady:
+        m["flow_times"] = fields.n / flow_time(flow)
     return m
 
 
@@ -321,12 +363,16 @@ def plan(cases, levels, background):
     out = []
     images, chain = "images" in levels, "chain" in levels
     for key in cases:
-        runs = []
-        if images:
-            runs += [Run(r, method) for r in CLEAN_RECIPES for method in ENGINES]
-        if chain:
-            runs += [Run(CHAIN_RECIPE, method, spicy) for spicy in (False, True) for method in ENGINES]
-        out.append((clean_measurement(key), list(dict.fromkeys(runs))))
+        clean, long = clean_measurement(key), chain_measurement(key)
+        runs = [Run(r, method) for r in CLEAN_RECIPES for method in ENGINES] if images else []
+        chain_runs = [Run(CHAIN_RECIPE, method, spicy) for spicy in (False, True) for method in ENGINES] if chain else []
+        if long == clean:
+            out.append((clean, list(dict.fromkeys(runs + chain_runs))))
+            continue
+        if runs:
+            out.append((clean, runs))
+        if chain_runs:
+            out.append((long, chain_runs))
     if background:
         recipes = CLEAN_RECIPES if images else tuple(BACKGROUND_ON_OFF.values())
         out.append((background_measurement(), [Run(r, method) for r in recipes for method in ENGINES]))
@@ -378,8 +424,9 @@ def run_images(cases, levels, work, report, parallel=PARALLEL, background=True, 
 
     for r in cases:
         flow = r.flow
-        for m in [m for m, _ in jobs if m.name == r.case.key]:
-            r.runs[f"{m.style.key}"] = records(m)
+        long = chain_measurement(r.case.key)
+        for m in [m for m, _ in jobs if m.flow_key == r.case.key and not m.reflections]:
+            r.runs[m.style.key if m.name == m.flow_key else "chain"] = records(m)
             for run, rec in done[m].items():
                 if rec["file"] is None:
                     continue
@@ -387,7 +434,7 @@ def run_images(cases, levels, work, report, parallel=PARALLEL, background=True, 
                     say(f"Metrics: {m.name}, {m.style.key} images, {run.folder}")
                     r.metrics.setdefault("images", {}).setdefault(f"{m.style.key}_{run.recipe}", {})[run.method] = (
                         image_metrics(flow, rec["file"]))
-                if "chain" in levels and m.style is CLEAN and run.recipe == CHAIN_RECIPE:
+                if "chain" in levels and m == long and run.recipe == CHAIN_RECIPE:
                     name = run.method + ("_spicy" if run.spicy else "")
                     say(f"Post-processing: {m.name}, {name}")
                     r.metrics.setdefault("chain", {}).setdefault("clean", {})[name] = chain_metrics(

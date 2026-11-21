@@ -136,8 +136,10 @@ class LagrangianAnalysis:
         def compute():
             f = self.fields
             a, b = self.window()
-            # The frames of the maps a to b - 1 (the map k: the frames k and k + 1); the rows are in time order
-            lo, hi = np.searchsorted(T["frame"], [a, b + 1])
+            # The frames of the maps a to b - 1 (the map k: the frames k s and k s + 1, s the map step of the fields);
+            # the rows are in time order
+            s = f.map_step
+            lo, hi = np.searchsorted(T["frame"], [a * s, (b - 1) * s + 2])
             x, y = self.track_positions(T["x"][lo:hi], T["y"][lo:hi])
             ax, ay = self.track_velocity(T["ax"][lo:hi].astype(np.float64), T["ay"][lo:hi].astype(np.float64), 2)
             row, col = self.cells(x, y)
@@ -230,7 +232,8 @@ class LagrangianAnalysis:
         if self.ptv_message(fig, "ptv_tracks"):
             return
         T, f = self.tracks(), self.fields
-        k = int(np.clip(self.map_index, 0, f.n - 1))
+        # The first frame of the map drawn (every map_step-th pair: SPICY fitted every n-th map)
+        k = int(np.clip(self.map_index, 0, f.n - 1)) * f.map_step
         lo, hi = np.searchsorted(T["frame"], [k - TRACK_FRAMES, k + 1 + TRACK_FRAMES + 1])
         ids, frames = T["id"][lo:hi], T["frame"][lo:hi]
         order = np.lexsort((frames, ids))

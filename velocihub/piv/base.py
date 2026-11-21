@@ -175,10 +175,15 @@ class Camera:
 # Engines
 
 
+# The value of a setting chosen where it is used (Parameter)
+AUTO = "auto"
+
+
 @dataclass(frozen=True)
 class Parameter:
     """A setting of a PIV engine, shown in the interface: its key, label, default value, kind ("float", "int",
-    "ints": integers separated by spaces, "bool", or "choice": one of choices) and help."""
+    "ints": integers separated by spaces, "bool", or "choice": one of choices) and help. A setting whose default is
+    "auto" also takes "auto" (its value then chosen where it is used)."""
 
     key: str
     label: str
@@ -189,6 +194,8 @@ class Parameter:
 
     def parse(self, value):
         """The value of a text (or of a value): ValueError if it is invalid."""
+        if self.default == AUTO and isinstance(value, str) and value.strip().lower() == AUTO:
+            return AUTO
         if self.kind == "choice":
             value = str(value).strip().lower()
             if value not in self.choices:
@@ -213,6 +220,8 @@ class Parameter:
 
     def format(self, value):
         """Text of a value, as entered in the interface."""
+        if value == AUTO:
+            return AUTO
         if self.kind == "ints":
             return " ".join(str(v) for v in value)
         if self.kind == "bool":
@@ -533,15 +542,29 @@ class PIVRun:
         else:
             from .regression import describe_regression, regression_record
 
+            # SPICY fitted every map_step-th map: the results hold those maps (their pairs); the tracks of a PTV all
+            # its frames (the map k is then the pair of the frames k map_step and k map_step + 1)
+            step = int(self.regression["settings"].get("map_step", 1))
+            pairs = self.pairs
+            if step > 1:
+                kept = np.arange(0, len(u), step)
+                u, v, info = u[kept], v[kept], info[kept]
+                sn = None if sn is None else sn[kept]
+                count = None if count is None else count[kept]
+                bad = set(failed)
+                failed = [j for j, k in enumerate(kept) if k in bad]
+                pairs = [self.pairs[k] for k in kept]
             # The fields of the regression; those of the PIV kept (raw_), its status (flow, no particles, masked)
             with np.load(os.path.join(self.work, "regressed.npz")) as reg:
                 ru, rv, rinfo, residual, n_rbf, rfailed = (reg[k] for k in ("u", "v", "info", "residual", "n_rbf",
                                                                              "failed"))
                 n_points = reg["n_points"] if "n_points" in reg.files else None
                 n_rejected = reg["n_rejected"] if "n_rejected" in reg.files else None
-            arrays, settings = self.vectors(xpx, ypx, ru, rv, sn, rinfo, self.pairs, failed,
+            arrays, settings = self.vectors(xpx, ypx, ru, rv, sn, rinfo, pairs, failed,
                                             status=self.status(xpx, ypx, info == 1), count=count,
                                             tracks=tracks is not None)
+            if step > 1:
+                settings.update(regression_map_step=step, computed_pairs=len(self.pairs))
             arrays.update(raw_u_px=u, raw_v_px=-v, raw_info=info, regression_residual_px=residual,
                           regression_n_rbf=n_rbf)
             if n_points is not None:

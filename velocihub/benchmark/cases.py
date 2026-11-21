@@ -112,8 +112,9 @@ FEW_PER_RBF = ("With the default 4 points per RBF, each RBF is fitted on about 4
                "averaged, so the fit is noisier than the bins of the grid.")
 EDGES = ("The RBFs at the edges of the field of view (and of the masks) are constrained by data on one side only: "
          "the fit is worse there.")
-PIV_RESOLUTION = ("With 4 vectors per RBF the RBFs are about 2 grid spacings apart, and wide (0.7 at the nearest one): "
-                  "structures shorter than about 5 grid spacings are smoothed out of the PIV vectors.")
+PIV_RESOLUTION = ("With 3 vectors per RBF (the default for a PIV) the RBFs are about 1.7 grid spacings apart, and wide "
+                  "(0.7 at the nearest one): the structures of 5 grid spacings keep about 80 % of their amplitude, the "
+                  "shorter ones less.")
 UNRESOLVED = ("The shortest wavelength (3 grid spacings) is not resolved by the RBFs (about 21 px apart): the "
               "residual is that mode.")
 
@@ -261,6 +262,9 @@ DEFAULT_MODES = ("The default recipe removes 6 POD modes: with 41 images, the mo
                  "their pairs fail. 1 mode is enough here.")
 STILL_FLUID = ("The POD background removal takes the particles that don't move (the still fluid around the jet) for "
                "the background: they are removed with the mean image, and the PIV/PTV find no particle there.")
+PIV_WINDOWS = ("Each PIV vector is the mean displacement over its 32 px window, twice the 16 px grid: the small "
+               "structures are filtered, so the fluctuations come out low and their gradients (the dissipation) "
+               "much lower. Smaller final windows recover them, with more noise (docs/processing.md).")
 
 
 def image_checks(ref, piv_rms, links, wrong, link_rms, track, binned, piv_outliers=None, known=None):
@@ -338,20 +342,23 @@ def chain_checks(mean, vort, extra=()):
 
 
 def turbulence_chain_checks():
-    """The statistics of the turbulence through the whole chain (200 maps: their convergence and the filter of the
-    PIV windows, which lowers the fluctuations and the dissipation)."""
+    """The statistics of the turbulence through the whole chain, against the exact ones: its record of
+    image_level.CHAIN_FLOW_TIMES flow times converges them within a few % (the exact fields on the same maps: RMS
+    0.99-1.02, integral scales 0.96-0.97, dissipation 1.04 of the best of the grid), so the limits are those of an
+    accurate measurement. The PIV windows filter the fluctuations and the dissipation (known issue)."""
     kw = dict(level="chain")
+    labels = {"rms_u_ratio": "RMS of u / that of the modes", "rms_v_ratio": "RMS of v / that of the modes",
+              "lx_u_ratio": "integral length L_x^u / that of the modes",
+              "ly_u_ratio": "integral length L_y^u / that of the modes",
+              "t_ratio": "integral time T_u / (L_x^u / U0)",
+              "dissipation_grid_ratio": "dissipation ε / the best the 16 px grid gives"}
+    ranges = {"rms_u_ratio": (0.9, 1.1), "rms_v_ratio": (0.9, 1.1), "lx_u_ratio": (0.85, 1.15),
+              "ly_u_ratio": (0.85, 1.15), "t_ratio": (0.85, 1.15), "dissipation_grid_ratio": (0.9, 1.1)}
+    filtered = {"rms_u_ratio", "rms_v_ratio", "dissipation_grid_ratio"}
     out = []
-    for method, name, ranges in (
-            ("piv", "PIV", {"rms_u_ratio": (0.75, 0.92), "rms_v_ratio": (0.84, 1.0), "lx_u_ratio": (0.85, 1.03),
-                            "ly_u_ratio": (0.95, 1.15), "t_ratio": (0.84, 1.03), "dissipation_ratio": (0.42, 0.62)}),
-            ("ptv", "PTV", {"rms_u_ratio": (0.85, 1.01), "rms_v_ratio": (0.93, 1.09), "lx_u_ratio": (0.79, 0.97),
-                            "ly_u_ratio": (0.9, 1.09), "t_ratio": (0.75, 0.92), "dissipation_ratio": (0.6, 0.8)})):
-        labels = {"rms_u_ratio": "RMS of u / that of the modes", "rms_v_ratio": "RMS of v / that of the modes",
-                  "lx_u_ratio": "integral length L_x^u / that of the modes",
-                  "ly_u_ratio": "integral length L_y^u / that of the modes",
-                  "t_ratio": "integral time T_u / (L_x^u / U0)", "dissipation_ratio": "dissipation ε / exact ε"}
-        out += [within("clean", method, metric, low, high, f"{name}: {labels[metric]}", **kw)
+    for method, name in (("piv", "PIV"), ("ptv", "PTV")):
+        out += [within("clean", method, metric, low, high, f"{name}: {labels[metric]}",
+                       known_issue=PIV_WINDOWS if method == "piv" and metric in filtered else "", **kw)
                 for metric, (low, high) in ranges.items()]
     return out
 
@@ -400,8 +407,7 @@ def _cases():
           + hard_checks(piv_rms=0.19, wrong=5.3)
           + chain_checks(mean={"piv": 0.12, "ptv": 0.091, "piv_spicy": 0.21, "ptv_spicy": 0.082},
                          vort={"piv": 0.004, "ptv": 0.0027}), seed=20),
-        Case("jet", common_checks(rms=0.15, rms_piv=0.21, vort=0.03, known={
-            "piv_better_than_noise": PIV_RESOLUTION}) + [
+        Case("jet", common_checks(rms=0.15, rms_piv=0.21, vort=0.03) + [
             below("nominal", "spicy_ptv", "half_width_error", 1.0, "SPICY (PTV): RMS error of the jet half-width (px)"),
             above("nominal", "spicy_ptv", "shear_ratio", "exact.shear_ratio",
                   "SPICY (PTV): peak shear at least that of the exact field on the grid", factor=0.95),
@@ -449,8 +455,8 @@ def _cases():
              + image_checks("clean_pod1", piv_rms=0.19, links=670, wrong=0.3, link_rms=0.23, track=23, binned=0.27,
                             piv_outliers=0.5)
              + hard_checks(piv_rms=0.26, wrong=6.6)
-             + chain_checks(mean={"piv": 0.25, "ptv": 0.27, "piv_spicy": 0.26, "ptv_spicy": 0.29},
-                            vort={"piv": 0.0087, "ptv": 0.0092}, extra=turbulence_chain_checks()), seed=60),
+             + chain_checks(mean={"piv": 0.052, "ptv": 0.075, "piv_spicy": 0.09, "ptv_spicy": 0.094},
+                            vort={"piv": 0.0018, "ptv": 0.0026}, extra=turbulence_chain_checks()), seed=60),
     ]
 
 

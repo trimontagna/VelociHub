@@ -147,7 +147,9 @@ def main(job_file):
         xpx, ypx = raw["xpx"].astype(np.float64), raw["ypx"].astype(np.float64)
         U, V, INFO = raw["u"], raw["v"], raw["info"]
     links = Links(work, xpx, ypx, status) if job.get("particles") else None
-    n = U.shape[0]
+    # The maps fitted: every map_step-th (regressed.npz holds those only, in order)
+    maps = list(range(0, U.shape[0], max(1, int(s.get("map_step", 1)))))
+    n = len(maps)
     t0, resumed, resumed_seconds, new = time.time(), 0, 0.0, 0
     warnings.filterwarnings("ignore")
     names = ("u", "v", "info", "residual", "n_rbf", "n_points", "n_rejected")
@@ -162,18 +164,19 @@ def main(job_file):
             continue
         out = {q: [] for q in names + ("failed",)}
         t_chunk = time.time()
-        for k in ks:
+        for j in ks:
             if os.path.exists(stop_file):
                 say(type="stopped")
                 return
+            k = maps[j]
             result = fit(U[k], V[k], INFO[k], xpx, ypx, flow, width, s, None if links is None else links.of(k))
             if result is None:
                 result = (U[k], V[k], INFO[k], np.nan, 0, 0, 0)
-                out["failed"].append(k)
+                out["failed"].append(j)
             for q, value in zip(names, result):
                 out[q].append(value)
             new += 1
-            say(type="progress", phase="spicy", done=k + 1, total=n, rate=(time.time() - t0) / new)
+            say(type="progress", phase="spicy", done=j + 1, total=n, rate=(time.time() - t0) / new)
         # Written whole, then renamed: a chunk interrupted while written is never read (discarded at the next start)
         partial = os.path.join(folder, f"partial_{start:06d}.npz")
         np.savez(partial, u=np.array(out["u"], np.float32), v=np.array(out["v"], np.float32),

@@ -114,3 +114,27 @@ def test_links_missing(tmp_path):
     xpx, ypx = grid()
     with pytest.raises(RuntimeError, match="run the PTV again"):
         sw.Links(str(tmp_path), xpx, ypx, np.zeros(xpx.shape, int))
+
+
+def test_points_per_rbf_auto(monkeypatch):
+    """The points per RBF default to "auto": 3 for the vectors of a PIV, 4 for the particles of a PTV (an explicit
+    value is kept for both); the worker gets the numbers."""
+    from velocihub.piv import regression as rg
+
+    checked = rg.check_regression({"method": "spicy"})
+    assert checked["settings"]["n_k"] == "auto"
+    assert rg.regression_text(checked)["settings"]["n_k"] == "auto"
+    assert rg.check_regression({"method": "spicy", "settings": {"n_k": "AUTO"}})["settings"]["n_k"] == "auto"
+    assert rg.points_per_rbf(checked["settings"], particles=False) == (3,)
+    assert rg.points_per_rbf(checked["settings"], particles=True) == (4,)
+    explicit = rg.check_regression({"method": "spicy", "settings": {"n_k": "6 12"}})
+    assert rg.points_per_rbf(explicit["settings"], False) == rg.points_per_rbf(explicit["settings"], True) == (6, 12)
+    with pytest.raises(ValueError):
+        rg.check_regression({"method": "spicy", "settings": {"n_k": "0"}})
+    jobs = []
+    monkeypatch.setattr(rg, "spicy_available", lambda: (True, ""))
+    monkeypatch.setattr(rg, "WorkerProcess", lambda exe, script, job, work: jobs.append(job))
+    for particles in (False, True):
+        rg.start_regression("work", checked, [], 320, "key", particles=particles)
+    assert [job["settings"]["n_k"] for job in jobs] == [(3,), (4,)]
+    assert jobs[0]["key"] != jobs[1]["key"]

@@ -97,3 +97,49 @@ def test_tractrac_spicy_fits_the_particles(copy):
     assert np.all(np.isfinite(residual)) and np.median(residual) < 1
     post = vh.PostProcessing(vh.load_vectors(path, pixels=True), vh.PostSettings())
     check_jet(post)
+
+
+def test_spicy_every_nth_map(copy):
+    """SPICY fitting every 2nd map of a PTV (setting map_step): the results hold the maps 0, 2, 4... (their pairs and
+    their binned cells), each fitted on the links of its own pair; the tracks keep every frame, the map k being the
+    pair of the frames 2k and 2k + 1; the post-processing and its PTV figures read them."""
+    pytest.importorskip("imutils")
+    pytest.importorskip("spicy_vki")
+    from velocihub.piv.displacements import pair_particles, read_tracks
+
+    folder = copy("images")
+    images = sorted(os.path.join(folder, "PreProcessing", n) for n in os.listdir(os.path.join(folder, "PreProcessing"))
+                    if n.endswith(".tif"))
+    engine = piv.get_engine("tractrac")
+    run = piv.PIVRun(images, None, "tractrac", {"spacing": 16, "vid_loop": 0},
+                     os.path.join(folder, engine.results_folder), info={"measurement_folder": folder},
+                     regression={"method": "spicy", "settings": {"map_step": 2}})
+    pairs = run.pairs
+    path = run.run(report=lambda message: None)
+    with np.load(path) as z:
+        settings = json.loads(str(z["settings"]))
+        n_points, rejected = z["regression_n_points"], z["regression_n_rejected"]
+        binned = z["ptv_particles"].reshape(len(n_points), -1).sum(1)
+        n_maps = z["u_px"].shape[0]
+    assert n_maps == len(range(0, len(pairs), 2)) == len(settings["pairs"])
+    assert settings["pairs"] == [list(p) for p in pairs[::2]] and settings["regression_map_step"] == 2
+    assert settings["computed_pairs"] == len(pairs)
+    # Each map fitted on the links of its own pair: those binned in its cells
+    assert np.array_equal(n_points + rejected, binned)
+    fields = vh.load_vectors(path, pixels=True)
+    assert fields.map_step == 2 and fields.n == n_maps
+    # The raw fields kept are the maps 0, 2, 4... of the same PTV without SPICY; the tracks have their frames
+    alone = piv.PIVRun(images, None, "tractrac", {"spacing": 16, "vid_loop": 0}, os.path.join(folder, "PTV_alone"),
+                       info={"measurement_folder": folder}).run(report=lambda message: None)
+    with np.load(alone) as a, np.load(path) as z:
+        assert np.allclose(z["raw_u_px"], a["u_px"][::2], equal_nan=True)
+        assert np.array_equal(z["ptv_particles"], a["ptv_particles"][::2])
+    T = read_tracks(fields.tracks)
+    assert all(pair_particles(T, 2 * k) is not None for k in range(n_maps))
+    post = vh.PostProcessing(fields, vh.PostSettings())
+    check_jet(post)
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure
+    post.draw("ptv_tracks", Figure(), index=n_maps - 1)
+    assert post.acceleration() is not None
