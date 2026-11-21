@@ -96,7 +96,7 @@ The interface starts with **intensity capping, n = 10, after the background remo
 | Interface | API | Default | Meaning |
 |---|---|---|---|
 | Remove the background (Ctrl+P) | `n_modes_removed > 0` | on | Subtracts the first modes from each image. |
-| Modes removed | `n_modes_removed` | 6 | The first mode is close to the mean image; a few more modes remove the slowly varying background. Too many modes start to remove particles. |
+| Modes removed | `n_modes_removed` | 6 | The first mode is close to the mean image; a few more modes remove the slowly varying background. Too many modes start to remove particles: see [Don't remove too many POD modes](#dont-remove-too-many-pod-modes). |
 | Offset (grey levels) | `session.background_offset` (`background_removal.offset` in the settings) | `"auto"` | Added after the removal. The first mode is about the mean image, which also holds the light of the particles averaged over the images; a pixel without a particle at that instant ends below 0, and the images, kept at the bit depth of the raw ones, would be clipped there, cutting the tails of the particles. `auto`: just enough for 99 % of the pixels (the 1st percentile of 10 training images without offset, out of the masks); or a number (0: clipped at 0, as before VelociHub 1.2). Without contrast enhancement after the removal, the masked pixels are at the offset too, so the masks make no edge. On the benchmark (8-bit images, 1 mode): offset 22, particles keep 98 % of their brightness instead of 89 %, the reflections left fall from 3.7 % to 0.2 %. |
 
 ### Export (Run step)
@@ -117,6 +117,53 @@ The interface starts with **intensity capping, n = 10, after the background remo
 | `PreProcessing/preprocessing.json` | Recipe, steps, source folder and files, format, names of the images exported |
 | `PreProcessing/pod.npz` | Eigenvalues, spatial modes, temporal coefficients (restored on reopening, used by the post-processing's POD figures) |
 | `VelociHub_project.json`, section `preprocessing` | The settings of the page (masks, contrast, background removal, thresholds, export folder) |
+
+## What to expect
+
+> **Note.** POD, when the number of modes removed is adapted to the recording length and to the contrast available
+> for the particles, has always been noticed to improve the quality of the PIV/PTV results (higher S/N, more valid
+> vectors for PIV; more track links, fewer spurious links for PTV). The option, on by default, to offset grey levels
+> after POD is also beneficial. However, other pre-processing methods are hit or miss depending on whether synthetic
+> or real recordings are used. Generally speaking, do not expect to save a poor image set with any of these
+> additional filters. They may however significantly improve it to the human eye.
+
+The comparisons behind this note are in the [benchmark](benchmark.md) (synthetic images and a real recording).
+
+### Don't remove too many POD modes
+
+> **Warning.** Remove as few modes as the background needs: one is often enough. The first mode is about the mean
+> image. The next ones hold what changes slowly from image to image; on a short recording, or with particles that
+> keep a similar pattern from one image to the next, they already hold the particles of single images. Removing them
+> takes those particles out of their image, and the pairs they belong to fail. Check the tiles of the modes before
+> choosing (Evaluate modes): a mode showing particles must not be removed.
+
+On the synthetic cases of the benchmark (clean images, 41 images for the steady flows, 201 for the turbulence), with
+1 mode removed and with the 6 modes of the default recipe (6 modes, then intensity capping):
+
+| Case | Measure | No removal | 1 mode | 6 modes |
+|---|---|---|---|---|
+| Uniform flow | PIV: RMS error (px) | 0.015 | 0.015 | **1.95** |
+| Uniform flow | PTV: particles linked per pair | 1070 | 1050 | **316** |
+| Uniform flow | PTV: wrong links (%) | 0.03 | 0.03 | **1.1** |
+| Cylinder | PTV: wrong links (%) | 0.15 | 0.16 | **4.6** |
+| Blasius layer | PIV: RMS error (px) | 0.041 | 0.051 | **0.151** |
+| Blasius layer | PTV: wrong links (%) | 0.07 | 0.11 | **3.5** |
+| Turbulence (201 images) | PTV: wrong links (%) | 0.14 | 0.15 | **0.81** |
+
+The uniform flow is the worst: every image is the same pattern of particles, shifted, which the modes after the first
+take for background. On a real recording of 500 images (a jet), the same 6 modes changed the PIV and the PTV by a few
+% only: the number of modes to remove grows with the length of the recording and with how much the particle pattern
+changes between images.
+
+### Particles that don't move are removed with the background
+
+> **Warning.** The background removal subtracts what is common to all the images. Particles that stay in place over
+> the recording (still fluid, a recirculation, particles stuck on a window) are part of that common image: they are
+> removed, even with a single mode, and the PIV/PTV find nothing there. Where the fluid is still or very slow, compare
+> the results with those of the raw images, and if that region matters, run without the background removal.
+
+On the synthetic jet, whose surrounding fluid is still: with 1 mode removed, the PIV error goes from 0.15 px to 1.4 px
+and its valid vectors from 99.8 % to 87 %; the PTV links fall from 1200 to 670 per pair.
 
 ## Tips
 
